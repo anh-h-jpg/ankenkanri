@@ -56,15 +56,16 @@ export const FileUploadModal: React.FC<FileUploadModalProps> = ({
   const handleFileUpload = async (file: File) => {
     setLoading(true);
     setLastResult(null);
-    setProgressMsg(`ファイル ${file.name} を読み込み中...`);
+    setProgressMsg('処理中...（ファイル読み込み開始）');
 
     try {
       const nowStr = new Date().toISOString().slice(0, 10);
 
       if (activeTab === 'shot') {
-        setProgressMsg('ショット管理シートを解析中...');
+        setProgressMsg('処理中...（ショット管理シートを解析中）');
         const res = await parseShotCsv(file, settings.companyMerges, settings.stopDateColumnName);
 
+        setProgressMsg('処理中...（スナップショット履歴を更新中）');
         const snapshotItems = res.data.map((t) => ({
           key: t.dymTaskId || t.id,
           status: t.status,
@@ -92,9 +93,10 @@ export const FileUploadModal: React.FC<FileUploadModalProps> = ({
           message: `ショットタスク ${res.validRows.toLocaleString()}件を読み込みました。`,
         });
       } else if (activeTab === 'kyujin') {
-        setProgressMsg('求人依頼表を解析中...');
+        setProgressMsg('処理中...（求人依頼表を解析中）');
         const res = await parseKyujinCsv(file, settings.companyMerges, settings.stopDateColumnName);
 
+        setProgressMsg('処理中...（スナップショット履歴を更新中）');
         const snapshotItems = res.data.map((t) => ({
           key: t.dymTaskId || t.id,
           status: t.status,
@@ -122,7 +124,7 @@ export const FileUploadModal: React.FC<FileUploadModalProps> = ({
           message: `求人依頼表タスク ${res.validRows.toLocaleString()}件を読み込みました。`,
         });
       } else {
-        setProgressMsg('dym_todo_list を解析中...');
+        setProgressMsg('処理中...（dym_todo_list を解析・照合中）');
         const res = await parseDymtaskListCsv(file);
         onImportDymtaskSubtasks(res.data);
         setLastResult({

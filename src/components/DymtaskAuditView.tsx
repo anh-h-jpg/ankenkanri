@@ -1,10 +1,13 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertOctagon,
   AlertTriangle,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Download,
   FileCheck2,
+  Loader2,
   RefreshCw,
   Search,
   ShieldAlert,
@@ -20,11 +23,13 @@ import {
   ExceptionLevel,
 } from '../types';
 import { auditDymtaskList, AuditReport } from '../utils/dymtaskAuditor';
+import { runAuditInWorker } from '../utils/workerClient';
 import { SvgTimelineChart } from './SvgTimelineChart';
 
 interface DymtaskAuditViewProps {
   dymtaskSubtasks: DymtaskSubtask[];
   registryMap: Map<string, BaseRegistryTask>;
+  activeRecurringTasks?: BaseRegistryTask[];
   settings: AppSettings;
   onOpenUpload: () => void;
 }
@@ -32,6 +37,7 @@ interface DymtaskAuditViewProps {
 export const DymtaskAuditView: React.FC<DymtaskAuditViewProps> = ({
   dymtaskSubtasks,
   registryMap,
+  activeRecurringTasks,
   settings,
   onOpenUpload,
 }) => {
@@ -40,10 +46,39 @@ export const DymtaskAuditView: React.FC<DymtaskAuditViewProps> = ({
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [auditDate, setAuditDate] = useState<string>('2026-10-12');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [isAuditing, setIsAuditing] = useState<boolean>(false);
 
-  const auditReport: AuditReport = useMemo(() => {
-    return auditDymtaskList(dymtaskSubtasks, registryMap, settings, auditDate);
-  }, [dymtaskSubtasks, registryMap, settings, auditDate]);
+  const [auditReport, setAuditReport] = useState<AuditReport>(() => {
+    return auditDymtaskList(dymtaskSubtasks, registryMap, settings, auditDate, activeRecurringTasks);
+  });
+
+  useEffect(() => {
+    let isCancelled = false;
+    setIsAuditing(true);
+
+    runAuditInWorker(dymtaskSubtasks, registryMap, settings, auditDate, activeRecurringTasks)
+      .then((res) => {
+        if (!isCancelled) {
+          setAuditReport(res);
+          setIsAuditing(false);
+        }
+      })
+      .catch((err) => {
+        console.error('Audit run error:', err);
+        if (!isCancelled) {
+          // Fallback to local
+          const fallback = auditDymtaskList(dymtaskSubtasks, registryMap, settings, auditDate, activeRecurringTasks);
+          setAuditReport(fallback);
+          setIsAuditing(false);
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [dymtaskSubtasks, registryMap, settings, auditDate, activeRecurringTasks]);
 
   const assignees = useMemo(() => {
     const set = new Set<string>();
@@ -69,6 +104,12 @@ export const DymtaskAuditView: React.FC<DymtaskAuditViewProps> = ({
       return true;
     });
   }, [auditReport.exceptions, levelFilter, selectedAssignee, categoryFilter, searchQuery]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredExceptions.length / pageSize));
+  const paginatedExceptions = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filteredExceptions.slice(start, start + pageSize);
+  }, [filteredExceptions, currentPage, pageSize]);
 
   const handleExportExceptionsCsv = () => {
     if (filteredExceptions.length === 0) return;
@@ -163,6 +204,13 @@ export const DymtaskAuditView: React.FC<DymtaskAuditViewProps> = ({
           </button>
         </div>
       </div>
+
+      {isAuditing && (
+        <div className="p-3 bg-indigo-950/40 border border-indigo-800/60 rounded-xl text-xs text-indigo-300 flex items-center gap-2.5 animate-pulse">
+          <Loader2 className="w-4 h-4 animate-spin text-indigo-400 shrink-0" />
+          <span>処理中...（Dymtask検証を実行中）</span>
+        </div>
+      )}
 
       {/* 5 Big Stat Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
@@ -463,7 +511,7 @@ export const DymtaskAuditView: React.FC<DymtaskAuditViewProps> = ({
                   </td>
                 </tr>
               ) : (
-                filteredExceptions.map((ex) => (
+                paginatedExceptions.map((ex) => (
                   <tr
                     key={ex.id}
                     className="hover:bg-zinc-800/30 transition-colors"
@@ -517,6 +565,34 @@ export const DymtaskAuditView: React.FC<DymtaskAuditViewProps> = ({
               )}
             </tbody>
           </table>
+        </div>
+
+        {/* Exceptions Table Pagination Footer */}
+        <div className="p-4 bg-zinc-950/80 border-t border-zinc-800 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-zinc-400">
+          <div>
+            {filteredExceptions.length > 0 ? (currentPage - 1) * pageSize + 1 : 0}〜
+            {Math.min(currentPage * pageSize, filteredExceptions.length)}件を表示中（全{filteredExceptions.length}件）
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              disabled={currentPage <= 1}
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              className="p-1 rounded-lg border border-zinc-800 bg-zinc-900 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-zinc-800 text-zinc-300"
+            >
+              <ChevronLeft className="w-3.5 h-3.5" />
+            </button>
+            <span>
+              {currentPage} / {totalPages} ページ
+            </span>
+            <button
+              disabled={currentPage >= totalPages}
+              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              className="p-1 rounded-lg border border-zinc-800 bg-zinc-900 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-zinc-800 text-zinc-300"
+            >
+              <ChevronRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
         </div>
       </div>
     </div>

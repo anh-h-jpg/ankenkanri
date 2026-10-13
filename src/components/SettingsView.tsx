@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   Database,
   ExternalLink,
+  Link,
   Play,
   Plus,
   Save,
@@ -13,6 +14,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { AppSettings } from '../types';
+import { parseGoogleSheetUrl } from '../utils/normalize';
 import { clearSnapshots } from '../utils/storage';
 import { runPureFunctionTests, TestResult } from '../utils/testSuite';
 
@@ -32,6 +34,40 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [newAliasFrom, setNewAliasFrom] = useState('');
   const [newAliasTo, setNewAliasTo] = useState('');
   const [testResults, setTestResults] = useState<TestResult[] | null>(null);
+
+  // URL paste inputs
+  const [shotUrlInput, setShotUrlInput] = useState('');
+  const [kyujinUrlInput, setKyujinUrlInput] = useState('');
+  const [shotExtractSuccess, setShotExtractSuccess] = useState(false);
+  const [kyujinExtractSuccess, setKyujinExtractSuccess] = useState(false);
+
+  const handleShotUrlPaste = (val: string) => {
+    setShotUrlInput(val);
+    const parsed = parseGoogleSheetUrl(val);
+    if (parsed.bookId || parsed.gid) {
+      setForm((prev) => ({
+        ...prev,
+        shotBookId: parsed.bookId !== undefined ? parsed.bookId : prev.shotBookId,
+        shotGid: parsed.gid !== undefined ? parsed.gid : prev.shotGid,
+      }));
+      setShotExtractSuccess(true);
+      setTimeout(() => setShotExtractSuccess(false), 3000);
+    }
+  };
+
+  const handleKyujinUrlPaste = (val: string) => {
+    setKyujinUrlInput(val);
+    const parsed = parseGoogleSheetUrl(val);
+    if (parsed.bookId || parsed.gid) {
+      setForm((prev) => ({
+        ...prev,
+        kyujinBookId: parsed.bookId !== undefined ? parsed.bookId : prev.kyujinBookId,
+        kyujinGid: parsed.gid !== undefined ? parsed.gid : prev.kyujinGid,
+      }));
+      setKyujinExtractSuccess(true);
+      setTimeout(() => setKyujinExtractSuccess(false), 3000);
+    }
+  };
 
   const handleSave = () => {
     onSaveSettings(form);
@@ -109,58 +145,112 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
           {/* Shot File */}
-          <div className="space-y-3 p-3 bg-zinc-950/60 rounded-xl border border-zinc-800/80">
-            <div className="font-semibold text-zinc-200 flex items-center justify-between">
-              <span>File A: ショット管理タブ</span>
-              <span className="text-[11px] text-zinc-500">既定GID: 7242854</span>
+          <div className="space-y-3 p-3.5 bg-zinc-950/60 rounded-xl border border-zinc-800/80">
+            <div className="font-semibold text-zinc-200 flex items-center justify-between border-b border-zinc-800/80 pb-2">
+              <span className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+                <span>File A: ショット管理タブ</span>
+              </span>
+              <span className="text-[11px] text-zinc-500">単発タスク</span>
             </div>
+
+            {/* URL Paste Box for File A */}
             <div>
-              <label className="text-zinc-400 block mb-1">スプレッドシートID (BOOK_ID)：</label>
+              <label className="text-zinc-300 font-medium flex items-center gap-1 mb-1">
+                <Link className="w-3 h-3 text-indigo-400" />
+                <span>GoogleスプレッドシートのURLを貼り付け（自動抽出）：</span>
+              </label>
               <input
                 type="text"
-                value={form.shotBookId}
-                onChange={(e) => setForm({ ...form, shotBookId: e.target.value })}
-                placeholder="1exampleSpreadsheetId..."
-                className="w-full px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-200 text-xs font-mono"
+                value={shotUrlInput}
+                onChange={(e) => handleShotUrlPaste(e.target.value)}
+                placeholder="https://docs.google.com/spreadsheets/d/.../edit#gid=..."
+                className="w-full px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-200 text-xs font-mono placeholder:text-zinc-600 focus:outline-none focus:border-indigo-500"
               />
+              {shotExtractSuccess && (
+                <div className="text-[11px] text-emerald-400 flex items-center gap-1 mt-1 animate-in fade-in">
+                  <CheckCircle2 className="w-3 h-3 shrink-0" />
+                  <span>URLからBOOK_IDとGIDを自動抽出しました</span>
+                </div>
+              )}
             </div>
-            <div>
-              <label className="text-zinc-400 block mb-1">シートタブGID：</label>
-              <input
-                type="text"
-                value={form.shotGid}
-                onChange={(e) => setForm({ ...form, shotGid: e.target.value })}
-                placeholder="7242854"
-                className="w-full px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-200 text-xs font-mono"
-              />
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 border-t border-zinc-800/40">
+              <div>
+                <label className="text-zinc-400 block mb-1">スプレッドシートID (BOOK_ID)：</label>
+                <input
+                  type="text"
+                  value={form.shotBookId}
+                  onChange={(e) => setForm({ ...form, shotBookId: e.target.value.trim() })}
+                  placeholder="未設定（直接入力またはURLから抽出）"
+                  className="w-full px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-200 text-xs font-mono placeholder:text-zinc-600 focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+              <div>
+                <label className="text-zinc-400 block mb-1">シートタブGID：</label>
+                <input
+                  type="text"
+                  value={form.shotGid}
+                  onChange={(e) => setForm({ ...form, shotGid: e.target.value.trim() })}
+                  placeholder="未設定（例: 0）"
+                  className="w-full px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-200 text-xs font-mono placeholder:text-zinc-600 focus:outline-none focus:border-indigo-500"
+                />
+              </div>
             </div>
           </div>
 
           {/* Kyujin File */}
-          <div className="space-y-3 p-3 bg-zinc-950/60 rounded-xl border border-zinc-800/80">
-            <div className="font-semibold text-zinc-200 flex items-center justify-between">
-              <span>File B: 求人依頼表タブ</span>
-              <span className="text-[11px] text-zinc-500">既定GID: 1828959786</span>
+          <div className="space-y-3 p-3.5 bg-zinc-950/60 rounded-xl border border-zinc-800/80">
+            <div className="font-semibold text-zinc-200 flex items-center justify-between border-b border-zinc-800/80 pb-2">
+              <span className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                <span>File B: 求人依頼表タブ</span>
+              </span>
+              <span className="text-[11px] text-zinc-500">定期・不定期タスク</span>
             </div>
+
+            {/* URL Paste Box for File B */}
             <div>
-              <label className="text-zinc-400 block mb-1">スプレッドシートID (BOOK_ID)：</label>
+              <label className="text-zinc-300 font-medium flex items-center gap-1 mb-1">
+                <Link className="w-3 h-3 text-indigo-400" />
+                <span>GoogleスプレッドシートのURLを貼り付け（自動抽出）：</span>
+              </label>
               <input
                 type="text"
-                value={form.kyujinBookId}
-                onChange={(e) => setForm({ ...form, kyujinBookId: e.target.value })}
-                placeholder="1exampleSpreadsheetId..."
-                className="w-full px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-200 text-xs font-mono"
+                value={kyujinUrlInput}
+                onChange={(e) => handleKyujinUrlPaste(e.target.value)}
+                placeholder="https://docs.google.com/spreadsheets/d/.../edit#gid=..."
+                className="w-full px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-200 text-xs font-mono placeholder:text-zinc-600 focus:outline-none focus:border-indigo-500"
               />
+              {kyujinExtractSuccess && (
+                <div className="text-[11px] text-emerald-400 flex items-center gap-1 mt-1 animate-in fade-in">
+                  <CheckCircle2 className="w-3 h-3 shrink-0" />
+                  <span>URLからBOOK_IDとGIDを自動抽出しました</span>
+                </div>
+              )}
             </div>
-            <div>
-              <label className="text-zinc-400 block mb-1">シートタブGID：</label>
-              <input
-                type="text"
-                value={form.kyujinGid}
-                onChange={(e) => setForm({ ...form, kyujinGid: e.target.value })}
-                placeholder="1828959786"
-                className="w-full px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-200 text-xs font-mono"
-              />
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 border-t border-zinc-800/40">
+              <div>
+                <label className="text-zinc-400 block mb-1">スプレッドシートID (BOOK_ID)：</label>
+                <input
+                  type="text"
+                  value={form.kyujinBookId}
+                  onChange={(e) => setForm({ ...form, kyujinBookId: e.target.value.trim() })}
+                  placeholder="未設定（直接入力またはURLから抽出）"
+                  className="w-full px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-200 text-xs font-mono placeholder:text-zinc-600 focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+              <div>
+                <label className="text-zinc-400 block mb-1">シートタブGID：</label>
+                <input
+                  type="text"
+                  value={form.kyujinGid}
+                  onChange={(e) => setForm({ ...form, kyujinGid: e.target.value.trim() })}
+                  placeholder="未設定（例: 0）"
+                  className="w-full px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-200 text-xs font-mono placeholder:text-zinc-600 focus:outline-none focus:border-indigo-500"
+                />
+              </div>
             </div>
           </div>
         </div>

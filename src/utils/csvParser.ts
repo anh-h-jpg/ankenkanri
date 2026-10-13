@@ -38,6 +38,8 @@ export async function parseShotCsv(
   mergeRules: Record<string, string>,
   stopDateColConfig: string = '停止日'
 ): Promise<ParseResult<BaseRegistryTask>> {
+  const startTime = performance.now();
+  console.time('CSV解析: ショット');
   return new Promise((resolve, reject) => {
     Papa.parse<string[]>(fileOrText as any, {
       skipEmptyLines: false,
@@ -121,6 +123,10 @@ export async function parseShotCsv(
             }
           }
 
+          console.timeEnd('CSV解析: ショット');
+          const elapsed = Math.round(performance.now() - startTime);
+          console.log(`[CSV解析: ショット 完了] 所要時間: ${elapsed}ms (有効: ${tasks.length}件, スキップ: ${skipped}件)`);
+
           resolve({
             data: tasks,
             totalRawRows: rawRows.length,
@@ -149,6 +155,8 @@ export async function parseKyujinCsv(
   mergeRules: Record<string, string>,
   stopDateColConfig: string = '停止日'
 ): Promise<ParseResult<BaseRegistryTask>> {
+  const startTime = performance.now();
+  console.time('CSV解析: 求人依頼表');
   return new Promise((resolve, reject) => {
     Papa.parse<string[]>(fileOrText as any, {
       skipEmptyLines: false,
@@ -235,6 +243,10 @@ export async function parseKyujinCsv(
             }
           }
 
+          console.timeEnd('CSV解析: 求人依頼表');
+          const elapsed = Math.round(performance.now() - startTime);
+          console.log(`[CSV解析: 求人依頼表 完了] 所要時間: ${elapsed}ms (有効: ${tasks.length}件, スキップ: ${skipped}件)`);
+
           resolve({
             data: tasks,
             totalRawRows: rawRows.length,
@@ -258,6 +270,8 @@ export async function parseKyujinCsv(
 export async function parseDymtaskListCsv(
   fileOrText: File | string
 ): Promise<ParseResult<DymtaskSubtask>> {
+  const startTime = performance.now();
+  console.time('CSV解析: dym_todo_list');
   return new Promise((resolve, reject) => {
     Papa.parse<Record<string, string>>(fileOrText as any, {
       header: true,
@@ -325,6 +339,10 @@ export async function parseDymtaskListCsv(
               lastUpdatedTime,
             });
           }
+
+          console.timeEnd('CSV解析: dym_todo_list');
+          const elapsed = Math.round(performance.now() - startTime);
+          console.log(`[CSV解析: dym_todo_list 完了] 所要時間: ${elapsed}ms (有効: ${subtasks.length}件, スキップ: ${skipped}件)`);
 
           resolve({
             data: subtasks,

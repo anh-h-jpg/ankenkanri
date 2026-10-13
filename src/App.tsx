@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { AnkenDetailModal } from './components/AnkenDetailModal';
 import { AnkenOverview } from './components/AnkenOverview';
 import { DymtaskAuditView } from './components/DymtaskAuditView';
@@ -11,8 +11,9 @@ import { FileUploadModal } from './components/FileUploadModal';
 import { Header } from './components/Header';
 import { NeedAttentionView } from './components/NeedAttentionView';
 import { SettingsView } from './components/SettingsView';
-import { AnkenSummary, AppSettings, BaseRegistryTask, DymtaskSubtask } from './types';
+import { AnkenSummary, AppSettings, DymtaskSubtask } from './types';
 import { parseDymtaskListCsv, parseKyujinCsv, parseShotCsv } from './utils/csvParser';
+import { registryStore } from './utils/registryStore';
 import {
   SAMPLE_DYMTASK_TODO_CSV,
   SAMPLE_KYUJIN_CSV,
@@ -30,10 +31,18 @@ export default function App() {
   const [isUploadOpen, setIsUploadOpen] = useState<boolean>(false);
   const [settings, setSettings] = useState<AppSettings>(loadSettings);
 
-  // In-browser task datasets
-  const [shotTasks, setShotTasks] = useState<BaseRegistryTask[]>([]);
-  const [kyujinTasks, setKyujinTasks] = useState<BaseRegistryTask[]>([]);
+  // In-memory Dymtask subtasks dataset
   const [dymtaskSubtasks, setDymtaskSubtasks] = useState<DymtaskSubtask[]>([]);
+
+  // Version counter to trigger re-renders only when registry store updates
+  const [, setRegistryVersion] = useState<number>(0);
+
+  // Subscribe to registryStore changes (indexes built ONCE upon import, zero re-indexing on UI changes)
+  useEffect(() => {
+    return registryStore.subscribe(() => {
+      setRegistryVersion((v) => v + 1);
+    });
+  }, []);
 
   // Selected Anken for Detail Modal
   const [selectedAnken, setSelectedAnken] = useState<AnkenSummary | null>(null);
@@ -47,144 +56,17 @@ export default function App() {
     }
   }, [isDarkMode]);
 
-  // Combined all registry tasks
-  const allRegistryTasks = useMemo(() => {
-    return [...kyujinTasks, ...shotTasks];
-  }, [kyujinTasks, shotTasks]);
-
-  // Map of dymTaskId -> BaseRegistryTask for fast lookup by Dymtask auditor
-  const registryMap = useMemo(() => {
-    const map = new Map<string, BaseRegistryTask>();
-    for (const t of allRegistryTasks) {
-      if (t.dymTaskId) {
-        map.set(t.dymTaskId, t);
-      }
-    }
-    return map;
-  }, [allRegistryTasks]);
-
-  // Group tasks by 案件
-  const ankens: AnkenSummary[] = useMemo(() => {
-    const map = new Map<
-      string,
-      {
-        rawNames: Set<string>;
-        assignees: Set<string>;
-        tasks: BaseRegistryTask[];
-        teikiRunning: number;
-        teikiStopped: number;
-        futeikiRunning: number;
-        futeikiStopped: number;
-        shotInProgress: number;
-        shotCompleted: number;
-        shotOther: number;
-        warningCount: number;
-        missingIdCount: number;
-        latestStopDate: string | null;
-      }
-    >();
-
-    for (const task of allRegistryTasks) {
-      const companyKey = task.companyName || '未設定';
-      let entry = map.get(companyKey);
-      if (!entry) {
-        entry = {
-          rawNames: new Set(),
-          assignees: new Set(),
-          tasks: [],
-          teikiRunning: 0,
-          teikiStopped: 0,
-          futeikiRunning: 0,
-          futeikiStopped: 0,
-          shotInProgress: 0,
-          shotCompleted: 0,
-          shotOther: 0,
-          warningCount: 0,
-          missingIdCount: 0,
-          latestStopDate: null,
-        };
-        map.set(companyKey, entry);
-      }
-
-      entry.rawNames.add(task.rawCompanyName || companyKey);
-      if (task.assignee) entry.assignees.add(task.assignee);
-      entry.tasks.push(task);
-
-      if (task.warningNotice) {
-        entry.warningCount++;
-      }
-
-      if (task.stopDate) {
-        if (!entry.latestStopDate || task.stopDate > entry.latestStopDate) {
-          entry.latestStopDate = task.stopDate;
-        }
-      }
-
-      if (task.taskType === '定期') {
-        if (task.status === '稼働中') {
-          entry.teikiRunning++;
-          if (!task.dymTaskId) entry.missingIdCount++;
-        } else if (task.status === '停止中') {
-          entry.teikiStopped++;
-        }
-      } else if (task.taskType === '不定期') {
-        if (task.status === '稼働中') {
-          entry.futeikiRunning++;
-          if (!task.dymTaskId) entry.missingIdCount++;
-        } else if (task.status === '停止中') {
-          entry.futeikiStopped++;
-        }
-      } else if (task.taskType === 'ショット') {
-        if (task.status === '完了') {
-          entry.shotCompleted++;
-        } else if (task.status === '対応中' || task.status === 'Wcheck中') {
-          entry.shotInProgress++;
-          if (!task.dymTaskId) entry.missingIdCount++;
-        } else {
-          entry.shotOther++;
-          if (!task.dymTaskId) entry.missingIdCount++;
-        }
-      } else {
-        if (task.status === '稼働中') {
-          if (!task.dymTaskId) entry.missingIdCount++;
-        }
-      }
-    }
-
-    const result: AnkenSummary[] = [];
-    for (const [canonicalName, data] of map.entries()) {
-      result.push({
-        canonicalName,
-        rawNames: Array.from(data.rawNames),
-        assignees: Array.from(data.assignees),
-        totalTasks: data.tasks.length,
-        teikiRunning: data.teikiRunning,
-        teikiStopped: data.teikiStopped,
-        futeikiRunning: data.futeikiRunning,
-        futeikiStopped: data.futeikiStopped,
-        shotInProgress: data.shotInProgress,
-        shotCompleted: data.shotCompleted,
-        shotOther: data.shotOther,
-        warningCount: data.warningCount,
-        missingIdCount: data.missingIdCount,
-        latestStopDate: data.latestStopDate,
-        tasks: data.tasks,
-      });
-    }
-
-    return result;
-  }, [allRegistryTasks]);
-
-  const totalWarningCount = useMemo(() => {
-    return allRegistryTasks.filter((t) => Boolean(t.warningNotice)).length;
-  }, [allRegistryTasks]);
-
-  const totalMissingIdCount = useMemo(() => {
-    return allRegistryTasks.filter((t) => {
-      if (t.dymTaskId) return false;
-      return t.sourceTab === 'ショット' ? t.status !== '完了' : t.status === '稼働中';
-    }).length;
-  }, [allRegistryTasks]);
+  // Read pre-indexed data structures from registryStore (O(1) access)
+  const ankens = registryStore.ankensSummary;
+  const registryMap = registryStore.registryMap;
+  const activeRecurringTasks = registryStore.activeRecurringTasks;
+  const totalWarningCount = registryStore.totalWarningCount;
+  const totalMissingIdCount = registryStore.totalMissingIdCount;
+  const shotTasksCount = registryStore.getShotTasksCount();
+  const kyujinTasksCount = registryStore.getKyujinTasksCount();
+  const attentionTasks = registryStore.attentionTasks.length > 0
+    ? registryStore.attentionTasks
+    : registryStore.getAllTasks();
 
   const handleLoadSampleData = async () => {
     try {
@@ -226,8 +108,9 @@ export default function App() {
 
       const dymtaskRes = await parseDymtaskListCsv(SAMPLE_DYMTASK_TODO_CSV);
 
-      setShotTasks(enrichedShot);
-      setKyujinTasks(enrichedKyujin);
+      // Store in high-performance registryStore (indexes once, avoiding full recomputation)
+      registryStore.setShotTasks(enrichedShot);
+      registryStore.setKyujinTasks(enrichedKyujin);
       setDymtaskSubtasks(dymtaskRes.data);
     } catch (e) {
       console.error('Failed to load sample data', e);
@@ -241,8 +124,7 @@ export default function App() {
 
   const handleClearAllData = () => {
     if (window.confirm('現在のセッション内のすべてのタスクデータを消去しますか？')) {
-      setShotTasks([]);
-      setKyujinTasks([]);
+      registryStore.clear();
       setDymtaskSubtasks([]);
       setSelectedAnken(null);
     }
@@ -258,8 +140,8 @@ export default function App() {
         setIsDarkMode={setIsDarkMode}
         onOpenUpload={() => setIsUploadOpen(true)}
         onLoadSample={handleLoadSampleData}
-        shotCount={shotTasks.length}
-        kyujinCount={kyujinTasks.length}
+        shotCount={shotTasksCount}
+        kyujinCount={kyujinTasksCount}
         dymtaskCount={dymtaskSubtasks.length}
         warningCount={totalWarningCount}
         missingIdCount={totalMissingIdCount}
@@ -279,6 +161,7 @@ export default function App() {
           <DymtaskAuditView
             dymtaskSubtasks={dymtaskSubtasks}
             registryMap={registryMap}
+            activeRecurringTasks={activeRecurringTasks}
             settings={settings}
             onOpenUpload={() => setIsUploadOpen(true)}
           />
@@ -286,7 +169,7 @@ export default function App() {
 
         {activeTab === 'attention' && (
           <NeedAttentionView
-            tasks={allRegistryTasks}
+            tasks={attentionTasks}
             settings={settings}
           />
         )}
@@ -313,12 +196,12 @@ export default function App() {
       <FileUploadModal
         isOpen={isUploadOpen}
         onClose={() => setIsUploadOpen(false)}
-        onImportShotTasks={(tasks) => setShotTasks(tasks)}
-        onImportKyujinTasks={(tasks) => setKyujinTasks(tasks)}
+        onImportShotTasks={(tasks) => registryStore.setShotTasks(tasks)}
+        onImportKyujinTasks={(tasks) => registryStore.setKyujinTasks(tasks)}
         onImportDymtaskSubtasks={(subs) => setDymtaskSubtasks(subs)}
         settings={settings}
-        shotTasksCount={shotTasks.length}
-        kyujinTasksCount={kyujinTasks.length}
+        shotTasksCount={shotTasksCount}
+        kyujinTasksCount={kyujinTasksCount}
         dymtaskSubtasksCount={dymtaskSubtasks.length}
       />
     </div>

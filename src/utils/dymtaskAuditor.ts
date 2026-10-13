@@ -1,5 +1,5 @@
 /**
- * Dymtask Todo List Audit pure functions (Japanese).
+ * Dymtask Todo List Audit pure functions (Japanese, highly optimized).
  */
 
 import {
@@ -28,17 +28,26 @@ export interface AuditReport {
     isBurst: boolean;
     actualTime: number;
   }[];
+  auditDurationMs?: number;
 }
 
 /**
- * Pure audit function: Evaluates Dymtask subtasks against business rules and registry.
+ * Pure audit function:
+ * - O(1) Map lookups per Dymtask row
+ * - Filtered index for active recurring tasks (avoiding looping over 11,000+ shot tasks)
+ * - Measured with console.time
  */
 export function auditDymtaskList(
   subtasks: DymtaskSubtask[],
   registryMap: Map<string, BaseRegistryTask>, // dymTaskId -> registryTask
   settings: AppSettings,
-  auditDateStr?: string // Target evaluation date (e.g. YYYY/MM/DD or YYYY-MM-DD)
+  auditDateStr?: string,
+  activeRecurringTasks?: BaseRegistryTask[], // Pre-filtered 定期 稼働中 tasks only (~300 tasks)
+  recurringByWeekday?: Map<string, BaseRegistryTask[]> // Pre-indexed weekday -> tasks
 ): AuditReport {
+  const startTime = performance.now();
+  console.time('Dymtask検証');
+
   const exceptions: AuditException[] = [];
 
   const assigneeDateActualMinutes = new Map<string, number>();
@@ -61,8 +70,9 @@ export function auditDymtaskList(
 
   const getStats = (user: string) => {
     const key = user || '担当者未設定';
-    if (!assigneeStats.has(key)) {
-      assigneeStats.set(key, {
+    let s = assigneeStats.get(key);
+    if (!s) {
+      s = {
         taskSet: new Set(),
         subtaskCount: 0,
         totalEst: 0,
@@ -71,13 +81,17 @@ export function auditDymtaskList(
         lastClose: null,
         errorCount: 0,
         reviewCount: 0,
-      });
+      };
+      assigneeStats.set(key, s);
     }
-    return assigneeStats.get(key)!;
+    return s;
   };
 
-  // Step 1: Row-by-row checks
-  for (const st of subtasks) {
+  const hasRegistry = registryMap && registryMap.size > 0;
+
+  // Step 1: Single-pass scan over Dymtask rows - O(N)
+  for (let i = 0; i < subtasks.length; i++) {
+    const st = subtasks[i];
     const stats = getStats(st.assignee);
     if (st.id) stats.taskSet.add(st.id);
     stats.subtaskCount += 1;
@@ -90,10 +104,14 @@ export function auditDymtaskList(
       if (!stats.firstClose || closeTime < stats.firstClose) stats.firstClose = closeTime;
       if (!stats.lastClose || closeTime > stats.lastClose) stats.lastClose = closeTime;
 
-      if (st.assignee && (st.substatus.toLowerCase() === 'done' || st.substatus.toLowerCase() === 'skipped')) {
-        const list = assigneeCloseEventsMap.get(st.assignee) || [];
+      const substatusLower = (st.substatus || '').toLowerCase();
+      if (st.assignee && (substatusLower === 'done' || substatusLower === 'skipped')) {
+        let list = assigneeCloseEventsMap.get(st.assignee);
+        if (!list) {
+          list = [];
+          assigneeCloseEventsMap.set(st.assignee, list);
+        }
         list.push({ subtask: st, closeTime });
-        assigneeCloseEventsMap.set(st.assignee, list);
       }
     }
 
@@ -105,8 +123,7 @@ export function auditDymtaskList(
 
     if (st.assignee && effectiveDay !== '未判定') {
       const dayKey = `${st.assignee}__${effectiveDay}`;
-      const cur = assigneeDateActualMinutes.get(dayKey) || 0;
-      assigneeDateActualMinutes.set(dayKey, cur + (st.actualMinutes || 0));
+      assigneeDateActualMinutes.set(dayKey, (assigneeDateActualMinutes.get(dayKey) || 0) + (st.actualMinutes || 0));
     }
 
     // 1. エラー: IDの桁数不正 (6桁必須)
@@ -198,11 +215,11 @@ export function auditDymtaskList(
       stats.errorCount += 1;
     }
 
-    // REGISTRY CHECKS
-    if (registryMap.size > 0 && cleanId && cleanId.length === 6) {
+    // REGISTRY CHECKS (O(1) Map Lookup only)
+    if (hasRegistry && cleanId && cleanId.length === 6) {
       const regTask = registryMap.get(cleanId);
-      // 6. エラー: 管理シートに存在しないDYMTASK ID
       if (!regTask) {
+        // 6. エラー: 管理シートに存在しないDYMTASK ID
         exceptions.push({
           id: `err-not-reg-${st.rowNumber}`,
           level: 'エラー',
@@ -261,11 +278,14 @@ export function auditDymtaskList(
       }
     }
 
-    // Deduplication
+    // Deduplication tracking
     const dedupKey = `${cleanId}__${effectiveDay}__${(st.assignee || '').toLowerCase()}__${(st.subtaskContent || '').toLowerCase().trim()}`;
-    const dedupList = subtaskDeduplicationMap.get(dedupKey) || [];
+    let dedupList = subtaskDeduplicationMap.get(dedupKey);
+    if (!dedupList) {
+      dedupList = [];
+      subtaskDeduplicationMap.set(dedupKey, dedupList);
+    }
     dedupList.push(st);
-    subtaskDeduplicationMap.set(dedupKey, dedupList);
 
     // 要確認: 実績時間の乖離 (≤25% または ≥200%)
     const est = st.estMinutes || 0;
@@ -376,53 +396,59 @@ export function auditDymtaskList(
 
   // Step 4: 連続一括完了（送信不正の疑い - BURST_CLOSURE）
   const burstSubtaskRowSet = new Set<number>();
-  for (const [assignee, events] of assigneeCloseEventsMap.entries()) {
-    events.sort((a, b) => a.closeTime.getTime() - b.closeTime.getTime());
-    const windowMs = settings.burstWindowMinutes * 60 * 1000;
+  const windowMs = settings.burstWindowMinutes * 60 * 1000;
 
-    for (let i = 0; i < events.length; i++) {
+  for (const [assignee, events] of assigneeCloseEventsMap.entries()) {
+    if (events.length < settings.burstCountThreshold) continue;
+
+    events.sort((a, b) => a.closeTime.getTime() - b.closeTime.getTime());
+
+    let i = 0;
+    while (i < events.length) {
       const startEvent = events[i];
       let j = i;
-      const windowEvents: typeof events = [];
-
       while (j < events.length && events[j].closeTime.getTime() - startEvent.closeTime.getTime() <= windowMs) {
-        windowEvents.push(events[j]);
         j++;
       }
 
-      if (windowEvents.length >= settings.burstCountThreshold) {
+      const burstCount = j - i;
+      if (burstCount >= settings.burstCountThreshold) {
         const stats = getStats(assignee);
-        for (const ev of windowEvents) {
-          burstSubtaskRowSet.add(ev.subtask.rowNumber);
+        for (let k = i; k < j; k++) {
+          burstSubtaskRowSet.add(events[k].subtask.rowNumber);
         }
 
-        const firstTimeStr = windowEvents[0].subtask.lastUpdatedTime;
-        const lastTimeStr = windowEvents[windowEvents.length - 1].subtask.lastUpdatedTime;
+        const firstTimeStr = events[i].subtask.lastUpdatedTime;
+        const lastTimeStr = events[j - 1].subtask.lastUpdatedTime;
         const closeDayStr = `${startEvent.closeTime.getFullYear()}/${String(startEvent.closeTime.getMonth() + 1).padStart(2, '0')}/${String(startEvent.closeTime.getDate()).padStart(2, '0')}`;
+
         exceptions.push({
           id: `rev-burst-${assignee}-${startEvent.closeTime.getTime()}`,
           level: '要確認',
           category: 'BURST_CLOSURE',
           categoryNameJa: '連続一括完了（送信不正の疑い）',
           date: closeDayStr,
-          taskId: `${windowEvents.length}件`,
+          taskId: `${burstCount}件`,
           assignee: assignee,
           subtaskContent: `${firstTimeStr} 〜 ${lastTimeStr} に一括完了`,
-          detail: `${settings.burstWindowMinutes}分以内に ${windowEvents.length}件のサブタスクが連続完了されました。実際の送信有無または終了間際の一括処理か確認が必要です。`,
-          rowNumber: windowEvents[0].subtask.rowNumber,
+          detail: `${settings.burstWindowMinutes}分以内に ${burstCount}件のサブタスクが連続完了されました。実際の送信有無または終了間際の一括処理か確認が必要です。`,
+          rowNumber: events[i].subtask.rowNumber,
           evidence: {
-            burstCount: windowEvents.length,
+            burstCount,
             windowMinutes: settings.burstWindowMinutes,
           },
         });
         stats.reviewCount += 1;
-        i = j - 1;
+        i = j;
+      } else {
+        i++;
       }
     }
   }
 
   // Step 5: Dymtask未送信 (本日の定期タスク - MISSING_SCHEDULED_DUMMY)
-  if (registryMap.size > 0 && auditDateStr) {
+  // OPTIMIZATION: Only evaluate prefiltered 定期 稼働中 tasks (~300 tasks)! NEVER scan 11,000 ショット tasks!
+  if (auditDateStr && (activeRecurringTasks || recurringByWeekday || hasRegistry)) {
     const formattedAuditDate = auditDateStr.replace(/-/g, '/');
     const auditDate = parseDateTime(auditDateStr);
     const standardDateIso = auditDate ? auditDate.toISOString().slice(0, 10) : '';
@@ -432,8 +458,10 @@ export function auditDymtaskList(
       const weekdayChars = ['日', '月', '火', '水', '木', '金', '土'];
       const currentWeekdayChar = weekdayChars[dayOfWeekNum];
 
+      // Build Set of task IDs performed on this audit date
       const performedTaskIdsOnDate = new Set<string>();
-      for (const st of subtasks) {
+      for (let i = 0; i < subtasks.length; i++) {
+        const st = subtasks[i];
         const stDay = st.deadlineDay
           ? st.deadlineDay.replace(/-/g, '/')
           : st.parsedCloseDate
@@ -444,42 +472,60 @@ export function auditDymtaskList(
         }
       }
 
-      for (const [dymId, task] of registryMap.entries()) {
-        if (task.sourceTab === '求人依頼表' && task.status === '稼働中' && task.taskType === '定期') {
-          const freq = task.frequency || '';
-          const dayDetail = task.dayDetail || '';
-
-          let isDueToday = false;
-          if (freq === '毎日') {
-            isDueToday = true;
-          } else if (freq === '週次' && dayDetail.includes(currentWeekdayChar)) {
-            isDueToday = true;
+      // Check ONLY the active recurring tasks pool (~300 tasks max), NEVER shot tasks!
+      let tasksToCheck: BaseRegistryTask[] = [];
+      if (recurringByWeekday && recurringByWeekday.has(currentWeekdayChar)) {
+        tasksToCheck = recurringByWeekday.get(currentWeekdayChar)!;
+      } else if (activeRecurringTasks) {
+        tasksToCheck = activeRecurringTasks;
+      } else {
+        // Fallback: only filter if no pre-index, strictly checking 定期 & 稼働中
+        for (const t of registryMap.values()) {
+          if (t.sourceTab === '求人依頼表' && t.status === '稼働中' && t.taskType === '定期') {
+            tasksToCheck.push(t);
           }
+        }
+      }
 
-          if (isDueToday && !performedTaskIdsOnDate.has(dymId)) {
-            exceptions.push({
-              id: `err-missing-sched-${dymId}`,
-              level: 'エラー',
-              category: 'MISSING_SCHEDULED_DUMMY',
-              categoryNameJa: 'Dymtask未送信 (本日の定期タスク)',
-              date: formattedAuditDate,
-              taskId: dymId,
-              assignee: task.assignee || '担当者未設定',
-              subtaskContent: task.taskName,
-              detail: `定期タスク ${dymId}（${task.companyName}）は本日稼働予定（${freq} - ${dayDetail || '全日'}）ですが、Dymtaskの記録がありません。`,
-              rowNumber: task.originalRowNumber,
-            });
-            const stats = getStats(task.assignee || '担当者未設定');
-            stats.errorCount += 1;
-          }
+      for (let i = 0; i < tasksToCheck.length; i++) {
+        const task = tasksToCheck[i];
+        const dymId = task.dymTaskId;
+        if (!dymId) continue;
+
+        const freq = task.frequency || '';
+        const dayDetail = task.dayDetail || '';
+
+        let isDueToday = false;
+        if (freq === '毎日') {
+          isDueToday = true;
+        } else if (freq === '週次' && dayDetail.includes(currentWeekdayChar)) {
+          isDueToday = true;
+        }
+
+        if (isDueToday && !performedTaskIdsOnDate.has(dymId)) {
+          exceptions.push({
+            id: `err-missing-sched-${dymId}`,
+            level: 'エラー',
+            category: 'MISSING_SCHEDULED_DUMMY',
+            categoryNameJa: 'Dymtask未送信 (本日の定期タスク)',
+            date: formattedAuditDate,
+            taskId: dymId,
+            assignee: task.assignee || '担当者未設定',
+            subtaskContent: task.taskName,
+            detail: `定期タスク ${dymId}（${task.companyName}）は本日稼働予定（${freq} - ${dayDetail || '全日'}）ですが、Dymtaskの記録がありません。`,
+            rowNumber: task.originalRowNumber,
+          });
+          const stats = getStats(task.assignee || '担当者未設定');
+          stats.errorCount += 1;
         }
       }
     }
   }
 
-  // Scatter plot points
+  // Scatter plot points for SVG visual timeline
   const timeScatterPoints: AuditReport['timeScatterPoints'] = [];
-  for (const st of subtasks) {
+  for (let i = 0; i < subtasks.length; i++) {
+    const st = subtasks[i];
     if (st.parsedCloseDate) {
       const d = st.parsedCloseDate;
       const hours = d.getHours() + d.getMinutes() / 60 + d.getSeconds() / 3600;
@@ -521,10 +567,14 @@ export function auditDymtaskList(
 
   let errorCount = 0;
   let reviewCount = 0;
-  for (const ex of exceptions) {
-    if (ex.level === 'エラー') errorCount++;
+  for (let i = 0; i < exceptions.length; i++) {
+    if (exceptions[i].level === 'エラー') errorCount++;
     else reviewCount++;
   }
+
+  const durationMs = Math.round(performance.now() - startTime);
+  console.timeEnd('Dymtask検証');
+  console.log(`[Dymtask検証 完了] 所要時間: ${durationMs}ms (サブタスク: ${subtasks.length}件, 例外: ${exceptions.length}件)`);
 
   return {
     totalRows: subtasks.length,
@@ -535,8 +585,8 @@ export function auditDymtaskList(
     exceptions,
     assigneeSummaries,
     timeScatterPoints,
+    auditDurationMs: durationMs,
   };
 }
 
-// Backward compatibility alias
 export const auditDummyTodoList = auditDymtaskList;

@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   AlertCircle,
   Building2,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   ExternalLink,
   Filter,
   Search,
@@ -21,23 +23,47 @@ export const AnkenDetailModal: React.FC<AnkenDetailModalProps> = ({
   onClose,
   settings,
 }) => {
-  const [activeTab, setActiveTab] = useState<'teiki' | 'futeiki' | 'shot'>('teiki');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'running' | 'stopped'>('all');
-  const [searchTerm, setSearchTerm] = useState('');
-
   if (!anken) return null;
 
-  const getSheetLink = (task: BaseRegistryTask) => {
-    if (!task.dymTaskId) return null;
+  // Smart initial tab: default to tab with tasks
+  const initialTab = useMemo<'teiki' | 'futeiki' | 'shot'>(() => {
+    if (anken.teikiRunning + anken.teikiStopped > 0) return 'teiki';
+    if (anken.futeikiRunning + anken.futeikiStopped > 0) return 'futeiki';
+    return 'shot';
+  }, [anken]);
+
+  const [activeTab, setActiveTab] = useState<'teiki' | 'futeiki' | 'shot'>(initialTab);
+  const [statusFilter, setStatusFilter] = useState<'all' | 'running' | 'stopped'>('all');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+
+  const [sheetWarningMsg, setSheetWarningMsg] = useState<string | null>(null);
+
+  const getSheetUrl = (task: BaseRegistryTask) => {
     const isShot = task.sourceTab === 'ショット';
-    const bookId = isShot ? settings.shotBookId : settings.kyujinBookId;
-    const gid = isShot ? settings.shotGid : settings.kyujinGid;
+    const bookId = isShot ? settings.shotBookId?.trim() : settings.kyujinBookId?.trim();
+    const gid = isShot ? settings.shotGid?.trim() : settings.kyujinGid?.trim();
+    if (!bookId || !gid) return null;
     return `https://docs.google.com/spreadsheets/d/${bookId}/edit#gid=${gid}&range=${task.originalRowNumber}:${task.originalRowNumber}`;
   };
 
-  const teikiTasks = anken.tasks.filter((t) => t.taskType === '定期');
-  const futeikiTasks = anken.tasks.filter((t) => t.taskType === '不定期');
-  const shotTasks = anken.tasks.filter((t) => t.taskType === 'ショット');
+  const handleOpenSheet = (e: React.MouseEvent, task: BaseRegistryTask) => {
+    const isShot = task.sourceTab === 'ショット';
+    const bookId = isShot ? settings.shotBookId?.trim() : settings.kyujinBookId?.trim();
+    const gid = isShot ? settings.shotGid?.trim() : settings.kyujinGid?.trim();
+
+    if (!bookId || !gid) {
+      e.preventDefault();
+      setSheetWarningMsg('設定でBOOK_IDとGIDを入力してください');
+      setTimeout(() => setSheetWarningMsg(null), 5000);
+      return;
+    }
+  };
+
+  const teikiTasks = useMemo(() => anken.tasks.filter((t) => t.taskType === '定期'), [anken.tasks]);
+  const futeikiTasks = useMemo(() => anken.tasks.filter((t) => t.taskType === '不定期'), [anken.tasks]);
+  const shotTasks = useMemo(() => anken.tasks.filter((t) => t.taskType === 'ショット'), [anken.tasks]);
 
   const currentTabTasks =
     activeTab === 'teiki'
@@ -46,20 +72,28 @@ export const AnkenDetailModal: React.FC<AnkenDetailModalProps> = ({
       ? futeikiTasks
       : shotTasks;
 
-  const filteredTasks = currentTabTasks.filter((t) => {
-    if (activeTab !== 'shot') {
-      if (statusFilter === 'running' && t.status !== '稼働中') return false;
-      if (statusFilter === 'stopped' && t.status !== '停止中') return false;
-    }
-    if (searchTerm) {
-      const q = searchTerm.toLowerCase();
-      const matchName = (t.taskName || '').toLowerCase().includes(q);
-      const matchId = (t.dymTaskId || '').includes(q);
-      const matchUser = (t.assignee || '').toLowerCase().includes(q);
-      if (!matchName && !matchId && !matchUser) return false;
-    }
-    return true;
-  });
+  const filteredTasks = useMemo(() => {
+    return currentTabTasks.filter((t) => {
+      if (activeTab !== 'shot') {
+        if (statusFilter === 'running' && t.status !== '稼働中') return false;
+        if (statusFilter === 'stopped' && t.status !== '停止中') return false;
+      }
+      if (searchTerm) {
+        const q = searchTerm.toLowerCase();
+        const matchName = (t.taskName || '').toLowerCase().includes(q);
+        const matchId = (t.dymTaskId || '').includes(q);
+        const matchUser = (t.assignee || '').toLowerCase().includes(q);
+        if (!matchName && !matchId && !matchUser) return false;
+      }
+      return true;
+    });
+  }, [currentTabTasks, activeTab, statusFilter, searchTerm]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredTasks.length / pageSize));
+  const paginatedTasks = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filteredTasks.slice(start, start + pageSize);
+  }, [filteredTasks, currentPage, pageSize]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/80 backdrop-blur-sm animate-in fade-in duration-150">
@@ -104,6 +138,21 @@ export const AnkenDetailModal: React.FC<AnkenDetailModalProps> = ({
           </button>
         </div>
 
+        {sheetWarningMsg && (
+          <div className="px-5 py-2.5 bg-amber-950/80 border-b border-amber-800/80 text-amber-200 text-xs flex items-center justify-between animate-in fade-in">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
+              <span>{sheetWarningMsg}</span>
+            </div>
+            <button
+              onClick={() => setSheetWarningMsg(null)}
+              className="text-amber-400 hover:text-amber-200"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
         {/* Mini stats cards */}
         <div className="grid grid-cols-3 gap-3 p-4 bg-zinc-900/90 border-b border-zinc-800 text-xs">
           <div className="bg-zinc-950/80 p-3 rounded-xl border border-zinc-800">
@@ -147,6 +196,7 @@ export const AnkenDetailModal: React.FC<AnkenDetailModalProps> = ({
               onClick={() => {
                 setActiveTab('teiki');
                 setStatusFilter('all');
+                setCurrentPage(1);
               }}
               className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
                 activeTab === 'teiki'
@@ -160,6 +210,7 @@ export const AnkenDetailModal: React.FC<AnkenDetailModalProps> = ({
               onClick={() => {
                 setActiveTab('futeiki');
                 setStatusFilter('all');
+                setCurrentPage(1);
               }}
               className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
                 activeTab === 'futeiki'
@@ -173,6 +224,7 @@ export const AnkenDetailModal: React.FC<AnkenDetailModalProps> = ({
               onClick={() => {
                 setActiveTab('shot');
                 setStatusFilter('all');
+                setCurrentPage(1);
               }}
               className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
                 activeTab === 'shot'
@@ -191,7 +243,10 @@ export const AnkenDetailModal: React.FC<AnkenDetailModalProps> = ({
                   <Filter className="w-3 h-3" /> 絞り込み：
                 </span>
                 <button
-                  onClick={() => setStatusFilter('all')}
+                  onClick={() => {
+                    setStatusFilter('all');
+                    setCurrentPage(1);
+                  }}
                   className={`px-2.5 py-1 rounded-md text-xs transition-colors ${
                     statusFilter === 'all'
                       ? 'bg-zinc-700 text-white font-medium'
@@ -201,7 +256,10 @@ export const AnkenDetailModal: React.FC<AnkenDetailModalProps> = ({
                   すべて
                 </button>
                 <button
-                  onClick={() => setStatusFilter('running')}
+                  onClick={() => {
+                    setStatusFilter('running');
+                    setCurrentPage(1);
+                  }}
                   className={`px-2.5 py-1 rounded-md text-xs transition-colors ${
                     statusFilter === 'running'
                       ? 'bg-emerald-950/80 text-emerald-300 font-medium border border-emerald-800/80'
@@ -211,7 +269,10 @@ export const AnkenDetailModal: React.FC<AnkenDetailModalProps> = ({
                   稼働中
                 </button>
                 <button
-                  onClick={() => setStatusFilter('stopped')}
+                  onClick={() => {
+                    setStatusFilter('stopped');
+                    setCurrentPage(1);
+                  }}
                   className={`px-2.5 py-1 rounded-md text-xs transition-colors ${
                     statusFilter === 'stopped'
                       ? 'bg-rose-950/80 text-rose-300 font-medium border border-rose-800/80'
@@ -228,7 +289,10 @@ export const AnkenDetailModal: React.FC<AnkenDetailModalProps> = ({
               <input
                 type="text"
                 value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
+                onChange={(e) => {
+                  setSearchTerm(e.target.value);
+                  setCurrentPage(1);
+                }}
                 placeholder="ID・タスク名・担当者で検索"
                 className="pl-8 pr-3 py-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-indigo-500 w-52"
               />
@@ -236,7 +300,7 @@ export const AnkenDetailModal: React.FC<AnkenDetailModalProps> = ({
           </div>
         </div>
 
-        {/* Task Table */}
+        {/* Task Table (with virtual pagination to prevent freezing on large lists) */}
         <div className="flex-1 overflow-auto p-4">
           <table className="w-full text-left text-xs border-collapse">
             <thead>
@@ -259,15 +323,15 @@ export const AnkenDetailModal: React.FC<AnkenDetailModalProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800/60">
-              {filteredTasks.length === 0 ? (
+              {paginatedTasks.length === 0 ? (
                 <tr>
                   <td colSpan={9} className="py-8 text-center text-zinc-500">
                     該当するタスクがありません。
                   </td>
                 </tr>
               ) : (
-                filteredTasks.map((task) => {
-                  const sheetLink = getSheetLink(task);
+                paginatedTasks.map((task) => {
+                  const sheetUrl = getSheetUrl(task);
 
                   return (
                     <tr
@@ -376,11 +440,11 @@ export const AnkenDetailModal: React.FC<AnkenDetailModalProps> = ({
                         </td>
                       )}
 
-                      {/* Sheet link / Missing label */}
+                      {/* Sheet link */}
                       <td className="py-3 px-3 text-right">
-                        {sheetLink ? (
+                        {sheetUrl ? (
                           <a
-                            href={sheetLink}
+                            href={sheetUrl}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-indigo-300 bg-indigo-950/60 border border-indigo-800/70 hover:bg-indigo-900/60 transition-colors"
@@ -389,9 +453,19 @@ export const AnkenDetailModal: React.FC<AnkenDetailModalProps> = ({
                             <ExternalLink className="w-3 h-3" />
                           </a>
                         ) : (
-                          <span className="text-[11px] text-zinc-500 italic">
-                            行 {task.originalRowNumber}
-                          </span>
+                          <button
+                            type="button"
+                            disabled
+                            onClick={() => {
+                              setSheetWarningMsg('設定でBOOK_IDとGIDを入力してください');
+                              setTimeout(() => setSheetWarningMsg(null), 5000);
+                            }}
+                            title="設定でBOOK_IDとGIDを入力してください"
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-500 bg-zinc-900 border border-zinc-800 cursor-not-allowed opacity-50"
+                          >
+                            <span>シートの該当行を開く</span>
+                            <ExternalLink className="w-3 h-3 text-zinc-600" />
+                          </button>
                         )}
                       </td>
                     </tr>
@@ -402,17 +476,38 @@ export const AnkenDetailModal: React.FC<AnkenDetailModalProps> = ({
           </table>
         </div>
 
-        {/* Modal Footer */}
+        {/* Modal Footer with Pagination */}
         <div className="p-4 bg-zinc-950 border-t border-zinc-800 flex items-center justify-between text-xs text-zinc-400">
-          <span>
-            {filteredTasks.length}件 / 全{currentTabTasks.length}件を表示中
-          </span>
-          <button
-            onClick={onClose}
-            className="px-4 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-medium transition-colors"
-          >
-            閉じる
-          </button>
+          <div>
+            {filteredTasks.length > 0 ? (currentPage - 1) * pageSize + 1 : 0}〜
+            {Math.min(currentPage * pageSize, filteredTasks.length)}件を表示中（全{filteredTasks.length}件）
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              disabled={currentPage <= 1}
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              className="p-1 rounded-lg border border-zinc-800 bg-zinc-900 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-zinc-800 text-zinc-300"
+            >
+              <ChevronLeft className="w-3.5 h-3.5" />
+            </button>
+            <span>
+              {currentPage} / {totalPages}
+            </span>
+            <button
+              disabled={currentPage >= totalPages}
+              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              className="p-1 rounded-lg border border-zinc-800 bg-zinc-900 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-zinc-800 text-zinc-300"
+            >
+              <ChevronRight className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={onClose}
+              className="ml-4 px-4 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-medium transition-colors"
+            >
+              閉じる
+            </button>
+          </div>
         </div>
       </div>
     </div>

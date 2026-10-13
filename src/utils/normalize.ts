@@ -134,3 +134,27 @@ export function formatDateOnly(d: Date | null): string {
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())}`;
 }
+
+/**
+ * Parses a Google Spreadsheet URL and extracts BOOK_ID and GID.
+ * Supports:
+ * - https://docs.google.com/spreadsheets/d/{BOOK_ID}/edit#gid={GID}
+ * - https://docs.google.com/spreadsheets/d/{BOOK_ID}/edit?gid={GID}
+ */
+export function parseGoogleSheetUrl(url: string): { bookId?: string; gid?: string } {
+  if (!url) return {};
+  const trimmed = url.trim();
+  const res: { bookId?: string; gid?: string } = {};
+
+  const bookMatch = trimmed.match(/\/d\/([a-zA-Z0-9_-]+)/);
+  if (bookMatch && bookMatch[1]) {
+    res.bookId = bookMatch[1];
+  }
+
+  const gidMatch = trimmed.match(/[?#&]gid=([0-9]+)/i);
+  if (gidMatch && gidMatch[1]) {
+    res.gid = gidMatch[1];
+  }
+
+  return res;
+}

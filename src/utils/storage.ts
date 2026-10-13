@@ -10,10 +10,10 @@ const STORE_SNAPSHOTS = 'task_snapshots';
 const SETTINGS_KEY = 'anken_app_settings';
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  shotBookId: '1exampleShotSpreadsheetId',
-  shotGid: '7242854',
-  kyujinBookId: '1exampleKyujinSpreadsheetId',
-  kyujinGid: '1828959786',
+  shotBookId: '',
+  shotGid: '',
+  kyujinBookId: '',
+  kyujinGid: '',
   stopDateColumnName: '停止日',
   burstWindowMinutes: 5,
   burstCountThreshold: 10,
@@ -34,7 +34,21 @@ export function loadSettings(): AppSettings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
     if (raw) {
-      return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+      const parsed = JSON.parse(raw);
+      // Clean up legacy placeholder IDs if present
+      if (parsed.shotBookId && (parsed.shotBookId.includes('example') || parsed.shotBookId.includes('1BxiMVs'))) {
+        parsed.shotBookId = '';
+      }
+      if (parsed.kyujinBookId && (parsed.kyujinBookId.includes('example') || parsed.kyujinBookId.includes('1BxiMVs'))) {
+        parsed.kyujinBookId = '';
+      }
+      if (parsed.shotGid === '7242854' && !parsed.shotBookId) {
+        parsed.shotGid = '';
+      }
+      if (parsed.kyujinGid === '1828959786' && !parsed.kyujinBookId) {
+        parsed.kyujinGid = '';
+      }
+      return { ...DEFAULT_SETTINGS, ...parsed };
     }
   } catch (e) {
     console.warn('Failed to load settings from localStorage, using defaults', e);
@@ -109,53 +123,67 @@ export async function getAllSnapshots(): Promise<SnapshotEntry[]> {
 
 /**
  * Updates snapshots upon new file upload.
- * If a task transitions to 停止中 for the first time, sets firstSeenStoppedDate = uploadDate.
+ * Optimized with batch in-memory reading and writing to prevent UI freezing on 11,000+ items.
  */
 export async function updateSnapshots(
   tasks: { key: string; status: string }[],
   uploadDateStr: string
 ): Promise<Map<string, string>> {
-  // Returns map of key -> effectiveStopDate
   const effectiveStopDateMap = new Map<string, string>();
+  if (!tasks || tasks.length === 0) return effectiveStopDateMap;
 
   try {
     const db = await openDB();
-    const transaction = db.transaction(STORE_SNAPSHOTS, 'readwrite');
-    const store = transaction.objectStore(STORE_SNAPSHOTS);
 
-    for (const t of tasks) {
+    // 1. Read existing snapshots in a single getAll request
+    const existingSnapshots: SnapshotEntry[] = await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_SNAPSHOTS, 'readonly');
+      const store = tx.objectStore(STORE_SNAPSHOTS);
+      const req = store.getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error);
+    });
+
+    const existingMap = new Map<string, SnapshotEntry>();
+    for (let i = 0; i < existingSnapshots.length; i++) {
+      existingMap.set(existingSnapshots[i].key, existingSnapshots[i]);
+    }
+
+    // 2. Compute updates in memory
+    const toPut: SnapshotEntry[] = [];
+    for (let i = 0; i < tasks.length; i++) {
+      const t = tasks[i];
       if (!t.key) continue;
 
-      const getReq = store.get(t.key);
-      getReq.onsuccess = () => {
-        const existing: SnapshotEntry | undefined = getReq.result;
-        let firstStopped = existing?.firstSeenStoppedDate || '';
+      const existing = existingMap.get(t.key);
+      let firstStopped = existing?.firstSeenStoppedDate || '';
+      const isCurrentlyStopped = t.status === '停止中' || t.status.includes('停止');
 
-        const isCurrentlyStopped = t.status === '停止中' || t.status.includes('停止');
-
-        if (isCurrentlyStopped) {
-          if (!firstStopped) {
-            // First time transitioning to 停止中
-            firstStopped = uploadDateStr;
-          }
-          effectiveStopDateMap.set(t.key, firstStopped);
-        } else {
-          // Task is running or other, reset stopped if needed or retain history
+      if (isCurrentlyStopped) {
+        if (!firstStopped) {
+          firstStopped = uploadDateStr;
         }
+        effectiveStopDateMap.set(t.key, firstStopped);
+      }
 
-        const entry: SnapshotEntry = {
-          key: t.key,
-          status: t.status,
-          firstSeenStoppedDate: firstStopped,
-          uploadDate: uploadDateStr,
-        };
-        store.put(entry);
-      };
+      toPut.push({
+        key: t.key,
+        status: t.status,
+        firstSeenStoppedDate: firstStopped,
+        uploadDate: uploadDateStr,
+      });
+    }
+
+    // 3. Batch put in a single readwrite transaction
+    const writeTx = db.transaction(STORE_SNAPSHOTS, 'readwrite');
+    const writeStore = writeTx.objectStore(STORE_SNAPSHOTS);
+    for (let i = 0; i < toPut.length; i++) {
+      writeStore.put(toPut[i]);
     }
 
     await new Promise((resolve, reject) => {
-      transaction.oncomplete = () => resolve(true);
-      transaction.onerror = () => reject(transaction.error);
+      writeTx.oncomplete = () => resolve(true);
+      writeTx.onerror = () => reject(writeTx.error);
     });
   } catch (err) {
     console.error('IndexedDB update error:', err);

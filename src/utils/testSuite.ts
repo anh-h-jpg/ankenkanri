@@ -4,7 +4,7 @@
 
 import { classifyTaskRule } from './classifier';
 import { auditDymtaskList } from './dymtaskAuditor';
-import { extractDymTaskId, normalizeCompanyName } from './normalize';
+import { extractDymTaskId, normalizeCompanyName, parseGoogleSheetUrl } from './normalize';
 import { sanitizeRawRow, verifyNoCredentialsInRecord } from './security';
 import { DEFAULT_SETTINGS } from './storage';
 
@@ -132,6 +132,28 @@ export function runPureFunctionTests(): TestResult[] {
     });
   } catch (e: any) {
     results.push({ name: 'Dymtask検証', passed: false, message: e.message });
+  }
+
+  // Test 6: GoogleスプレッドシートURL解析（BOOK_IDとGIDの自動抽出）
+  try {
+    const url1 = 'https://docs.google.com/spreadsheets/d/1AbCdEfGhIjKlMnOpQrStUvWxYz_12345/edit#gid=1234567';
+    const parsed1 = parseGoogleSheetUrl(url1);
+    const url2 = 'https://docs.google.com/spreadsheets/d/1AbCdEfGhIjKlMnOpQrStUvWxYz_12345/edit?gid=9876543';
+    const parsed2 = parseGoogleSheetUrl(url2);
+
+    const passed =
+      parsed1.bookId === '1AbCdEfGhIjKlMnOpQrStUvWxYz_12345' &&
+      parsed1.gid === '1234567' &&
+      parsed2.bookId === '1AbCdEfGhIjKlMnOpQrStUvWxYz_12345' &&
+      parsed2.gid === '9876543';
+
+    results.push({
+      name: 'URL解析: GoogleスプレッドシートURLからのBOOK_IDとGID自動抽出',
+      passed,
+      message: passed ? 'URLからBOOK_IDとGIDを正確に抽出しました。' : 'URL抽出の検証に失敗しました。',
+    });
+  } catch (e: any) {
+    results.push({ name: 'URL解析', passed: false, message: e.message });
   }
 
   return results;
