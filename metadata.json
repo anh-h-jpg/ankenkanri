@@ -1,0 +1,6 @@
+{
+  "name": "案件管理 - Quản lý Task BPO & Audit Dummy Todo",
+  "description": "Ứng dụng web quản lý task theo 案件 (khách hàng), kiểm tra tính hợp lệ và phát hiện gian lận dummy task cho team 求人更新 BPO.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
