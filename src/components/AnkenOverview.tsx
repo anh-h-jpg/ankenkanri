@@ -5,6 +5,7 @@ import {
   Building2,
   ChevronLeft,
   ChevronRight,
+  Layers,
   Search,
   Users,
 } from 'lucide-react';
@@ -13,7 +14,7 @@ import { AnkenSummary } from '../types';
 interface AnkenOverviewProps {
   ankens: AnkenSummary[];
   onSelectAnken: (anken: AnkenSummary) => void;
-  onNavigateToAttention: () => void;
+  onNavigateToAttention?: (group?: 'runningNoId' | 'shotNoId' | 'warnings') => void;
 }
 
 export const AnkenOverview: React.FC<AnkenOverviewProps> = ({
@@ -35,7 +36,10 @@ export const AnkenOverview: React.FC<AnkenOverviewProps> = ({
     let shotInProgress = 0;
     let shotCompleted = 0;
     let totalWarnings = 0;
-    let totalMissingIds = 0;
+    let totalMissingIds = 0; // Regular running without ID (52)
+    let totalShotMissingIds = 0; // Shot incomplete without ID
+    let teikiRunningNoId = 0;
+    let futeikiRunningNoId = 0;
 
     for (const a of ankens) {
       teikiRunning += a.teikiRunning;
@@ -46,6 +50,9 @@ export const AnkenOverview: React.FC<AnkenOverviewProps> = ({
       shotCompleted += a.shotCompleted;
       totalWarnings += a.warningCount;
       totalMissingIds += a.missingIdCount;
+      totalShotMissingIds += (a.shotMissingIdCount || 0);
+      teikiRunningNoId += (a.teikiRunningNoIdCount || 0);
+      futeikiRunningNoId += (a.futeikiRunningNoIdCount || 0);
     }
 
     return {
@@ -58,6 +65,9 @@ export const AnkenOverview: React.FC<AnkenOverviewProps> = ({
       shotCompleted,
       totalWarnings,
       totalMissingIds,
+      totalShotMissingIds,
+      teikiRunningNoId,
+      futeikiRunningNoId,
     };
   }, [ankens]);
 
@@ -177,7 +187,7 @@ export const AnkenOverview: React.FC<AnkenOverviewProps> = ({
 
         {/* Warnings */}
         <div
-          onClick={onNavigateToAttention}
+          onClick={() => onNavigateToAttention && onNavigateToAttention('warnings')}
           className="bg-zinc-900/90 border border-zinc-800 hover:border-rose-700/60 p-4 rounded-xl shadow-sm cursor-pointer transition-colors group"
         >
           <div className="flex items-center justify-between text-zinc-400 text-xs mb-1.5 font-medium">
@@ -187,12 +197,12 @@ export const AnkenOverview: React.FC<AnkenOverviewProps> = ({
           <div className="text-2xl font-black text-rose-400 tracking-tight">
             {totals.totalWarnings}件
           </div>
-          <p className="text-[11px] text-zinc-400 mt-1">スケジュール不整合・要チェック</p>
+          <p className="text-[11px] text-zinc-400 mt-1">スケジュール不整合</p>
         </div>
 
-        {/* Missing DYMTASK ID */}
+        {/* Missing DYMTASK ID (Regular Running: 52) */}
         <div
-          onClick={onNavigateToAttention}
+          onClick={() => onNavigateToAttention && onNavigateToAttention('runningNoId')}
           className="bg-zinc-900/90 border border-zinc-800 hover:border-amber-700/60 p-4 rounded-xl shadow-sm cursor-pointer transition-colors group"
         >
           <div className="flex items-center justify-between text-zinc-400 text-xs mb-1.5 font-medium">
@@ -202,7 +212,24 @@ export const AnkenOverview: React.FC<AnkenOverviewProps> = ({
           <div className="text-2xl font-black text-amber-400 tracking-tight">
             {totals.totalMissingIds}件
           </div>
-          <p className="text-[11px] text-zinc-400 mt-1">シートへの追記が必要</p>
+          <p className="text-[11px] text-zinc-400 mt-1">
+            定期 {totals.teikiRunningNoId}件 + 不定期 {totals.futeikiRunningNoId}件
+          </p>
+        </div>
+
+        {/* Missing DYMTASK ID (Shot incomplete) */}
+        <div
+          onClick={() => onNavigateToAttention && onNavigateToAttention('shotNoId')}
+          className="bg-zinc-900/90 border border-zinc-800 hover:border-indigo-700/60 p-4 rounded-xl shadow-sm cursor-pointer transition-colors group"
+        >
+          <div className="flex items-center justify-between text-zinc-400 text-xs mb-1.5 font-medium">
+            <span>ショット未完了・ID未設定</span>
+            <Layers className="w-4 h-4 text-indigo-400 group-hover:scale-110 transition-transform" />
+          </div>
+          <div className="text-2xl font-black text-indigo-400 tracking-tight">
+            {totals.totalShotMissingIds}件
+          </div>
+          <p className="text-[11px] text-zinc-400 mt-1">単発・未完了タスク</p>
         </div>
       </div>
 

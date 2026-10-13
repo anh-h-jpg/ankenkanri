@@ -455,13 +455,13 @@ export const AnkenDetailModal: React.FC<AnkenDetailModalProps> = ({
                         ) : (
                           <button
                             type="button"
-                            disabled
+                            aria-disabled="true"
                             onClick={() => {
                               setSheetWarningMsg('設定でBOOK_IDとGIDを入力してください');
                               setTimeout(() => setSheetWarningMsg(null), 5000);
                             }}
                             title="設定でBOOK_IDとGIDを入力してください"
-                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-500 bg-zinc-900 border border-zinc-800 cursor-not-allowed opacity-50"
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-500 bg-zinc-900 border border-zinc-800 cursor-not-allowed opacity-50 hover:opacity-75 transition-colors"
                           >
                             <span>シートの該当行を開く</span>
                             <ExternalLink className="w-3 h-3 text-zinc-600" />

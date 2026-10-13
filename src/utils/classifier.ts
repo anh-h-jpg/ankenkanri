@@ -3,7 +3,7 @@
  */
 
 import { BaseRegistryTask, TaskStatus, TaskType } from '../types';
-import { extractDymTaskId, normalizeCompanyName, parseMinutes } from './normalize';
+import { extractDymTaskId, normalizeCompanyName, parseAssignees, parseMinutes } from './normalize';
 import { cleanHeaderName } from './security';
 
 const WEEKDAYS_REGEX = /[月火水木金土日]/;
@@ -64,7 +64,7 @@ export function classifyTaskRule(
 
   // 警告判定（頻度の分類を維持しつつ注意文言を付与）
   // 1. 不定期だが曜日詳細に特定曜日あり
-  if (freq === '不定期' && WEEKDAYS_REGEX.test(dayDetail)) {
+  if (freq === '不定期' && /[月火水木金土]/.test(dayDetail)) {
     warnings.push(`不定期だが曜日詳細に特定曜日あり（${dayDetail}）`);
   }
 
@@ -73,15 +73,33 @@ export function classifyTaskRule(
     warnings.push(`${freq}だが曜日詳細が不定期指定`);
   }
 
-  // 3. 月次だが曜日詳細に曜日指定あり
-  if (freq === '月次' && WEEKDAYS_REGEX.test(dayDetail)) {
+  // 3. 月次だが曜日詳細に特定曜日指定あり（※日付指定「1日」「15日」「末日」は除外、曜日指定のみ警告）
+  if (freq === '月次' && (dayDetail.includes('曜') || /[月火水木金土]/.test(dayDetail)) && !/^\d+日$/.test(dayDetail)) {
     warnings.push(`月次だが曜日詳細に曜日指定あり（${dayDetail}）`);
+  }
+
+  let warningCategory: 'MISMATCH' | 'EMPTY_FREQ' | 'UNKNOWN_FREQ' | undefined;
+  let warningCategoryJa: string | undefined;
+
+  if (taskType === '要確認') {
+    if (!freq) {
+      warningCategory = 'EMPTY_FREQ';
+      warningCategoryJa = '頻度空欄';
+    } else {
+      warningCategory = 'UNKNOWN_FREQ';
+      warningCategoryJa = '判定不可';
+    }
+  } else if (warnings.length > 0) {
+    warningCategory = 'MISMATCH';
+    warningCategoryJa = '頻度と曜日詳細の不一致';
   }
 
   return {
     taskType,
     isInferredFrequency,
     warningNotice: warnings.length > 0 ? warnings.join('；') : undefined,
+    warningCategory,
+    warningCategoryJa,
   };
 }
 
@@ -140,6 +158,8 @@ export function parseFileAShotRow(
     actualIdx: number;
     dymIdIdx: number;
     stopDateIdx?: number;
+    startDateIdx?: number;
+    completedDateIdx?: number;
   },
   originalRowNumber: number,
   mergeRules: Record<string, string>
@@ -164,6 +184,16 @@ export function parseFileAShotRow(
     ? getVal(colIndices.stopDateIdx) || null
     : null;
 
+  const rawAssignee = getVal(colIndices.assigneeIdx);
+  const assigneesList = parseAssignees(rawAssignee);
+
+  const shotStartDate = colIndices.startDateIdx !== undefined && colIndices.startDateIdx >= 0
+    ? getVal(colIndices.startDateIdx) || null
+    : null;
+  const shotCompletedDate = colIndices.completedDateIdx !== undefined && colIndices.completedDateIdx >= 0
+    ? getVal(colIndices.completedDateIdx) || null
+    : null;
+
   return {
     id: `shot-${originalRowNumber}-${dymTaskId || Math.random().toString(36).slice(2, 7)}`,
     originalRowNumber,
@@ -173,7 +203,8 @@ export function parseFileAShotRow(
     rawCompanyName: cleaned,
     taskName: taskNameVal || companyVal,
     applicantOrOwner: getVal(colIndices.ownerIdx),
-    assignee: getVal(colIndices.assigneeIdx),
+    assignee: rawAssignee,
+    assigneesList,
     estimatedMinutes: parseMinutes(getVal(colIndices.estIdx)),
     actualMinutes: parseMinutes(getVal(colIndices.actualIdx)),
     recordDate: getVal(colIndices.recordDateIdx),
@@ -182,6 +213,8 @@ export function parseFileAShotRow(
     taskType: 'ショット',
     stopDate,
     stopDateSource: stopDate ? 'file' : undefined,
+    shotStartDate,
+    shotCompletedDate,
   };
 }
 
@@ -232,6 +265,9 @@ export function parseFileBKyujinRow(
     ? getVal(colIndices.stopDateIdx) || null
     : null;
 
+  const rawAssignee = getVal(colIndices.assigneeIdx);
+  const assigneesList = parseAssignees(rawAssignee);
+
   return {
     id: `kyujin-${originalRowNumber}-${dymTaskId || Math.random().toString(36).slice(2, 7)}`,
     originalRowNumber,
@@ -241,7 +277,8 @@ export function parseFileBKyujinRow(
     rawCompanyName: cleaned,
     taskName: taskNameVal || companyVal,
     applicantOrOwner: getVal(colIndices.ownerIdx),
-    assignee: getVal(colIndices.assigneeIdx),
+    assignee: rawAssignee,
+    assigneesList,
     estimatedMinutes: parseMinutes(getVal(colIndices.estIdx)),
     recordDate: getVal(colIndices.recordDateIdx),
     status,
@@ -252,6 +289,8 @@ export function parseFileBKyujinRow(
     stopDate,
     stopDateSource: stopDate ? 'file' : undefined,
     warningNotice: classification.warningNotice,
+    warningCategory: classification.warningCategory,
+    warningCategoryJa: classification.warningCategoryJa,
     isInferredFrequency: classification.isInferredFrequency,
   };
 }

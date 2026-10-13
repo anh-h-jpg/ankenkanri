@@ -33,7 +33,13 @@ export interface BaseRegistryTask {
   stopDateSource?: 'file' | 'snapshot';
   notes?: string;
   warningNotice?: string; // 注意・警告内容
+  warningCategory?: 'MISMATCH' | 'EMPTY_FREQ' | 'UNKNOWN_FREQ';
+  warningCategoryJa?: string; // 頻度と曜日詳細の不一致 / 頻度空欄 / 判定不可
   isInferredFrequency?: boolean; // 頻度空欄: 曜日詳細より判定
+  // Shot execution timestamps
+  shotStartDate?: string | null; // 対応開始日
+  shotCompletedDate?: string | null; // 対応完了日
+  assigneesList?: string[]; // 分割された対応者一覧
 }
 
 export interface AnkenSummary {
@@ -51,9 +57,67 @@ export interface AnkenSummary {
   shotOther: number;
   // Anomalies
   warningCount: number;
-  missingIdCount: number; // ID未設定の稼働中タスク数
+  missingIdCount: number; // 定期・不定期の稼働中ID未設定数 (52)
+  shotMissingIdCount: number; // ショット未完了のID未設定数
+  teikiRunningNoIdCount: number; // 11
+  futeikiRunningNoIdCount: number; // 41
   latestStopDate: string | null;
   tasks: BaseRegistryTask[];
+}
+
+export type UserRoleMode = 'メンバー' | 'サブリード' | 'リード';
+
+export interface Member {
+  id: string;
+  name: string;
+  normalizedName: string; // 大文字・アクセント除去 (照合用)
+  role: 'メンバー' | 'サブリード' | 'リード';
+  subLeader?: string; // サブリード名
+  team: string; // チーム名
+}
+
+export interface AssigneeMapping {
+  rawName: string;
+  mappedMemberName: string;
+}
+
+export interface MemberQuarterKpi {
+  memberId: string;
+  memberName: string;
+  subLeader: string;
+  team: string;
+  year: number;
+  quarter: number; // 1-4
+  // 1. Dymtask送信率 (%)
+  sendRate: number;
+  sendRateTarget?: number;
+  scheduledIdDays: number;
+  sentIdDays: number;
+  // 2. 工数精度 (%)
+  estAccuracy: number;
+  estAccuracyTarget?: number;
+  doneSubtasksCount: number;
+  accurateSubtasksCount: number;
+  // 3. エラー率 (件 / 100 subtasks)
+  errorRatePer100: number;
+  errorRateTarget?: number;
+  totalErrors: number;
+  totalSubtasks: number;
+  reviewCount: number; // 参考
+  // 4. 稼働負荷 (%)
+  weeklyPlannedMinutes: number;
+  workloadRatio: number;
+  workloadTarget?: number;
+  // 5. ショット完了件数 (件)
+  shotCompletedCount: number;
+  shotCompletedTarget?: number;
+  // 6. ID付与率 (%)
+  idAssignRate: number;
+  idAssignRateTarget?: number;
+  runningTasksWithId: number;
+  runningTasksTotal: number;
+  // Futeiki task count (informational)
+  futeikiRunningCount: number;
 }
 
 export interface DymtaskSubtask {
@@ -157,8 +221,19 @@ export interface AppSettings {
   // Company Aliases / Merges
   companyMerges: Record<string, string>; // originalName -> canonicalName
 
+  // Assignee manual mappings
+  assigneeMappings?: Record<string, string>; // rawAssignee -> memberName
+
   // Non-working days (YYYY-MM-DD[])
   holidays: string[];
+
+  // Quarterly KPI Configurations
+  fiscalYearStartMonth?: number; // Default: 4 (4月開始)
+  weeklyCapacityMinutes?: number; // Default: 2400 (40h/week)
+  kpiSendRateTarget?: number; // Default: 95%
+  kpiEstAccuracyTarget?: number; // Default: 80%
+  kpiErrorRateThreshold?: number; // Default: 2.0 (件/100件)
+  kpiIdAssignRateTarget?: number; // Default: 90%
 
   // Google OAuth Client ID (Phase 2 readiness)
   googleClientId?: string;

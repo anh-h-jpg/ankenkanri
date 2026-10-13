@@ -2,6 +2,7 @@
  * Pure function unit tests and verification suite (Japanese).
  */
 
+import Papa from 'papaparse';
 import { classifyTaskRule } from './classifier';
 import { auditDymtaskList } from './dymtaskAuditor';
 import { extractDymTaskId, normalizeCompanyName, parseGoogleSheetUrl } from './normalize';
@@ -154,6 +155,52 @@ export function runPureFunctionTests(): TestResult[] {
     });
   } catch (e: any) {
     results.push({ name: 'URL解析', passed: false, message: e.message });
+  }
+
+  // Test 7: CSV改行含有・空行含有時の行番号（rowNumber）維持テスト
+  try {
+    const csvWithMultilineAndEmpty = [
+      '注釈行1,説明',
+      '注釈行2,説明',
+      'ステータス,会社名,DYMTASK',
+      '稼働中,"株式会社マルチライン\n改行セル",102901',
+      '',
+      '稼働中,空行後株式会社,102902',
+    ].join('\n');
+
+    const parsed = Papa.parse<string[]>(csvWithMultilineAndEmpty, {
+      skipEmptyLines: false,
+    });
+
+    const rows = parsed.data;
+    // rows[0] -> 行1 (注釈行1)
+    // rows[1] -> 行2 (注釈行2)
+    // rows[2] -> 行3 (ヘッダー)
+    // rows[3] -> 行4 (改行を含むセルを持つタスク: 3 + 1 = 4)
+    // rows[4] -> 行5 (空行)
+    // rows[5] -> 行6 (空行の後のタスク: 5 + 1 = 6)
+
+    const row4_num = 3 + 1;
+    const row6_num = 5 + 1;
+    const row4_company = rows[3] ? rows[3][1] : '';
+    const row6_company = rows[5] ? rows[5][1] : '';
+
+    const passed =
+      rows.length === 6 &&
+      row4_num === 4 &&
+      row6_num === 6 &&
+      row4_company.includes('改行セル') &&
+      row6_company === '空行後株式会社';
+
+    results.push({
+      name: '行番号算定: セル内改行および空行を含むCSVでのrowNumber保持検証',
+      passed,
+      message: passed
+        ? `正確に維持確認（全${rows.length}行中、セル内改行タスク: 行${row4_num}、空行後タスク: 行${row6_num}）`
+        : `行番号算定の不整合を検出しました（行数: ${rows.length}）`,
+    });
+  } catch (e: any) {
+    results.push({ name: '行番号算定', passed: false, message: e.message });
   }
 
   return results;

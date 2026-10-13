@@ -179,6 +179,8 @@ export default function App() {
             settings={settings}
             onSaveSettings={handleSaveSettings}
             onClearAllData={handleClearAllData}
+            registryMap={registryMap}
+            allTasks={registryStore.getAllTasks()}
           />
         )}
       </main>

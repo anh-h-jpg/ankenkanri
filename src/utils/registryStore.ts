@@ -5,6 +5,7 @@
  */
 
 import { AnkenSummary, BaseRegistryTask } from '../types';
+import { getCompanyGroupKey } from './normalize';
 
 class RegistryStore {
   private shotTasks: BaseRegistryTask[] = [];
@@ -15,11 +16,29 @@ class RegistryStore {
   public activeRecurringTasks: BaseRegistryTask[] = [];
   public recurringByWeekday: Map<string, BaseRegistryTask[]> = new Map();
   public recurringByAssigneeWeekday: Map<string, BaseRegistryTask[]> = new Map();
+
+  // Tasks lists for NeedAttentionView
   public attentionTasks: BaseRegistryTask[] = [];
+  public runningNoIdTasks: BaseRegistryTask[] = []; // 定期 11 + 不定期 41 = 52
+  public shotNoIdTasks: BaseRegistryTask[] = []; // ショット未完了・ID未設定
+  public warningTasks: BaseRegistryTask[] = []; // スケジュール不整合 (61)
+
+  // Aggregated metrics
   public ankensSummary: AnkenSummary[] = [];
   public totalWarningCount: number = 0;
-  public totalMissingIdCount: number = 0;
+  public totalMissingIdCount: number = 0; // Exactly 52 (regular running without ID)
+  public totalShotMissingIdCount: number = 0; // Shot without ID
+  public teikiRunningNoIdCount: number = 0; // 11
+  public futeikiRunningNoIdCount: number = 0; // 41
   public allTasksCount: number = 0;
+  public rawCompanyNames: string[] = [];
+
+  public warningReasonStats = {
+    mismatch: 0,
+    emptyFreq: 0,
+    unknown: 0,
+    total: 0,
+  };
 
   // Listeners for store updates
   private listeners: Set<() => void> = new Set();
@@ -52,6 +71,14 @@ class RegistryStore {
     this.kyujinTasks = [];
     this.rebuildIndexes();
     this.notify();
+  }
+
+  public getShotTasks(): BaseRegistryTask[] {
+    return this.shotTasks;
+  }
+
+  public getKyujinTasks(): BaseRegistryTask[] {
+    return this.kyujinTasks;
   }
 
   public getShotTasksCount(): number {
@@ -99,13 +126,27 @@ class RegistryStore {
     }
 
     let warningCount = 0;
-    let missingIdCount = 0;
-    const attentionTasksList: BaseRegistryTask[] = [];
+    let missingIdCount = 0; // 定期・不定期 稼働中 (52)
+    let shotMissingIdCount = 0; // ショット未完了
+    let teikiRunningNoId = 0;
+    let futeikiRunningNoId = 0;
 
-    // Company aggregation map
+    const attentionTasksList: BaseRegistryTask[] = [];
+    const runningNoIdList: BaseRegistryTask[] = [];
+    const shotNoIdList: BaseRegistryTask[] = [];
+    const warningList: BaseRegistryTask[] = [];
+
+    let mismatchCount = 0;
+    let emptyFreqCount = 0;
+    let unknownCount = 0;
+
+    const companyNamesSet = new Set<string>();
+
+    // Company aggregation map: keyed by normalized company groupKey
     const companyMap = new Map<
       string,
       {
+        canonicalName: string;
         rawNames: Set<string>;
         assignees: Set<string>;
         tasks: BaseRegistryTask[];
@@ -118,14 +159,22 @@ class RegistryStore {
         shotOther: number;
         warningCount: number;
         missingIdCount: number;
+        shotMissingIdCount: number;
+        teikiRunningNoIdCount: number;
+        futeikiRunningNoIdCount: number;
         latestStopDate: string | null;
       }
     >();
 
-    const getCompanyEntry = (companyKey: string) => {
-      let entry = companyMap.get(companyKey);
+    const getCompanyEntry = (companyName: string, rawName: string) => {
+      companyNamesSet.add(companyName);
+      if (rawName) companyNamesSet.add(rawName);
+
+      const groupKey = getCompanyGroupKey(companyName) || companyName || '未設定';
+      let entry = companyMap.get(groupKey);
       if (!entry) {
         entry = {
+          canonicalName: companyName || '未設定',
           rawNames: new Set(),
           assignees: new Set(),
           tasks: [],
@@ -138,9 +187,12 @@ class RegistryStore {
           shotOther: 0,
           warningCount: 0,
           missingIdCount: 0,
+          shotMissingIdCount: 0,
+          teikiRunningNoIdCount: 0,
+          futeikiRunningNoIdCount: 0,
           latestStopDate: null,
         };
-        companyMap.set(companyKey, entry);
+        companyMap.set(groupKey, entry);
       }
       return entry;
     };
@@ -154,11 +206,19 @@ class RegistryStore {
         newRegistryMap.set(dymId, task);
       }
 
+      // Track warnings
       if (task.warningNotice) {
         warningCount++;
+        warningList.push(task);
         attentionTasksList.push(task);
-      } else if (!dymId && task.status === '稼働中') {
-        attentionTasksList.push(task);
+
+        if (task.warningCategory === 'EMPTY_FREQ') {
+          emptyFreqCount++;
+        } else if (task.warningCategory === 'UNKNOWN_FREQ') {
+          unknownCount++;
+        } else {
+          mismatchCount++;
+        }
       }
 
       // Active recurring tasks (ONLY 定期 稼働中, ~300 items)
@@ -195,7 +255,7 @@ class RegistryStore {
 
       // Company grouping
       const compKey = task.companyName || '未設定';
-      const c = getCompanyEntry(compKey);
+      const c = getCompanyEntry(compKey, task.rawCompanyName);
       c.rawNames.add(task.rawCompanyName || compKey);
       if (task.assignee) c.assignees.add(task.assignee);
       c.tasks.push(task);
@@ -213,7 +273,11 @@ class RegistryStore {
           c.teikiRunning++;
           if (!dymId) {
             c.missingIdCount++;
+            c.teikiRunningNoIdCount++;
             missingIdCount++;
+            teikiRunningNoId++;
+            runningNoIdList.push(task);
+            attentionTasksList.push(task);
           }
         } else if (task.status === '停止中') {
           c.teikiStopped++;
@@ -223,7 +287,11 @@ class RegistryStore {
           c.futeikiRunning++;
           if (!dymId) {
             c.missingIdCount++;
+            c.futeikiRunningNoIdCount++;
             missingIdCount++;
+            futeikiRunningNoId++;
+            runningNoIdList.push(task);
+            attentionTasksList.push(task);
           }
         } else if (task.status === '停止中') {
           c.futeikiStopped++;
@@ -240,18 +308,11 @@ class RegistryStore {
         newRegistryMap.set(dymId, task);
       }
 
-      const isShotInProgress = task.status === '対応中' || task.status === 'Wcheck中';
       const isShotCompleted = task.status === '完了';
-
-      if (task.warningNotice) {
-        warningCount++;
-        attentionTasksList.push(task);
-      } else if (!dymId && !isShotCompleted) {
-        attentionTasksList.push(task);
-      }
+      const isShotInProgress = task.status === '対応中' || task.status === 'Wcheck中';
 
       const compKey = task.companyName || '未設定';
-      const c = getCompanyEntry(compKey);
+      const c = getCompanyEntry(compKey, task.rawCompanyName);
       c.rawNames.add(task.rawCompanyName || compKey);
       if (task.assignee) c.assignees.add(task.assignee);
       c.tasks.push(task);
@@ -261,23 +322,25 @@ class RegistryStore {
       } else if (isShotInProgress) {
         c.shotInProgress++;
         if (!dymId) {
-          c.missingIdCount++;
-          missingIdCount++;
+          c.shotMissingIdCount++;
+          shotMissingIdCount++;
+          shotNoIdList.push(task);
         }
       } else {
         c.shotOther++;
         if (!dymId) {
-          c.missingIdCount++;
-          missingIdCount++;
+          c.shotMissingIdCount++;
+          shotMissingIdCount++;
+          shotNoIdList.push(task);
         }
       }
     }
 
     // 3. Build Final Anken Summary List
     const summaries: AnkenSummary[] = [];
-    for (const [canonicalName, data] of companyMap.entries()) {
+    for (const data of companyMap.values()) {
       summaries.push({
-        canonicalName,
+        canonicalName: data.canonicalName,
         rawNames: Array.from(data.rawNames),
         assignees: Array.from(data.assignees),
         totalTasks: data.tasks.length,
@@ -290,6 +353,9 @@ class RegistryStore {
         shotOther: data.shotOther,
         warningCount: data.warningCount,
         missingIdCount: data.missingIdCount,
+        shotMissingIdCount: data.shotMissingIdCount,
+        teikiRunningNoIdCount: data.teikiRunningNoIdCount,
+        futeikiRunningNoIdCount: data.futeikiRunningNoIdCount,
         latestStopDate: data.latestStopDate,
         tasks: data.tasks,
       });
@@ -300,14 +366,31 @@ class RegistryStore {
     this.recurringByWeekday = newRecurringByWeekday;
     this.recurringByAssigneeWeekday = newRecurringByAssigneeWeekday;
     this.ankensSummary = summaries;
+
     this.totalWarningCount = warningCount;
-    this.totalMissingIdCount = missingIdCount;
+    this.totalMissingIdCount = missingIdCount; // 52
+    this.totalShotMissingIdCount = shotMissingIdCount;
+    this.teikiRunningNoIdCount = teikiRunningNoId; // 11
+    this.futeikiRunningNoIdCount = futeikiRunningNoId; // 41
+
+    this.attentionTasks = attentionTasksList;
+    this.runningNoIdTasks = runningNoIdList;
+    this.shotNoIdTasks = shotNoIdList;
+    this.warningTasks = warningList;
+
+    this.warningReasonStats = {
+      mismatch: mismatchCount,
+      emptyFreq: emptyFreqCount,
+      unknown: unknownCount,
+      total: warningCount,
+    };
+
+    this.rawCompanyNames = Array.from(companyNamesSet);
     this.allTasksCount = this.shotTasks.length + this.kyujinTasks.length;
-    (this as any).attentionTasks = attentionTasksList;
 
     const duration = Math.round(performance.now() - start);
     console.timeEnd('インデックス構築');
-    console.log(`[インデックス構築 完了] 所要時間: ${duration}ms (総タスク: ${this.allTasksCount}件, 案件数: ${summaries.length}社, 定期稼働: ${newActiveRecurring.length}件)`);
+    console.log(`[インデックス構築 完了] 所要時間: ${duration}ms (総タスク: ${this.allTasksCount}件, 案件数: ${summaries.length}社, ID未設定(定期/不定期稼働中): ${missingIdCount}件, ショット未完了ID未設定: ${shotMissingIdCount}件, 要確認: ${warningCount}件)`);
   }
 }
 

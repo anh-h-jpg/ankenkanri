@@ -1,20 +1,23 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
+  AlertCircle,
   AlertTriangle,
   Building2,
   CheckCircle2,
   Database,
   ExternalLink,
+  FileCheck2,
   Link,
   Play,
   Plus,
   Save,
+  Search,
   Sliders,
   TestTube,
   Trash2,
 } from 'lucide-react';
-import { AppSettings } from '../types';
-import { parseGoogleSheetUrl } from '../utils/normalize';
+import { AppSettings, BaseRegistryTask } from '../types';
+import { extractDymTaskId, parseGoogleSheetUrl } from '../utils/normalize';
 import { clearSnapshots } from '../utils/storage';
 import { runPureFunctionTests, TestResult } from '../utils/testSuite';
 
@@ -22,12 +25,16 @@ interface SettingsViewProps {
   settings: AppSettings;
   onSaveSettings: (settings: AppSettings) => void;
   onClearAllData: () => void;
+  registryMap?: Map<string, BaseRegistryTask>;
+  allTasks?: BaseRegistryTask[];
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
   settings,
   onSaveSettings,
   onClearAllData,
+  registryMap,
+  allTasks,
 }) => {
   const [form, setForm] = useState<AppSettings>({ ...settings });
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -41,15 +48,68 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [shotExtractSuccess, setShotExtractSuccess] = useState(false);
   const [kyujinExtractSuccess, setKyujinExtractSuccess] = useState(false);
 
+  // Verification section (確認用)
+  const [checkDymTaskId, setCheckDymTaskId] = useState('');
+
+  const foundCheckTask = useMemo(() => {
+    const rawInput = checkDymTaskId.trim();
+    if (!rawInput) return null;
+    const cleanId = extractDymTaskId(rawInput) || rawInput;
+
+    if (registryMap && registryMap.has(cleanId)) {
+      return registryMap.get(cleanId)!;
+    }
+    if (registryMap && registryMap.has(rawInput)) {
+      return registryMap.get(rawInput)!;
+    }
+    if (allTasks) {
+      return (
+        allTasks.find(
+          (t) =>
+            t.dymTaskId === cleanId ||
+            t.dymTaskId === rawInput ||
+            extractDymTaskId(t.dymTaskId) === cleanId
+        ) || null
+      );
+    }
+    return null;
+  }, [checkDymTaskId, registryMap, allTasks]);
+
+  const checkTaskSheetUrl = useMemo(() => {
+    if (!foundCheckTask) return null;
+    const isShot = foundCheckTask.sourceTab === 'ショット';
+    const bookId = isShot ? form.shotBookId?.trim() : form.kyujinBookId?.trim();
+    const gid = isShot ? form.shotGid?.trim() : form.kyujinGid?.trim();
+    if (!bookId || !gid) return null;
+    return `https://docs.google.com/spreadsheets/d/${bookId}/edit#gid=${gid}&range=${foundCheckTask.originalRowNumber}:${foundCheckTask.originalRowNumber}`;
+  }, [foundCheckTask, form.shotBookId, form.shotGid, form.kyujinBookId, form.kyujinGid]);
+
+  const sampleAvailableIds = useMemo(() => {
+    if (registryMap && registryMap.size > 0) {
+      return Array.from(registryMap.keys())
+        .filter((k) => k && k.length >= 4)
+        .slice(0, 6);
+    }
+    if (allTasks && allTasks.length > 0) {
+      return allTasks
+        .map((t) => t.dymTaskId)
+        .filter((id): id is string => Boolean(id && id.length >= 4))
+        .slice(0, 6);
+    }
+    return [];
+  }, [registryMap, allTasks]);
+
   const handleShotUrlPaste = (val: string) => {
     setShotUrlInput(val);
     const parsed = parseGoogleSheetUrl(val);
     if (parsed.bookId || parsed.gid) {
-      setForm((prev) => ({
-        ...prev,
-        shotBookId: parsed.bookId !== undefined ? parsed.bookId : prev.shotBookId,
-        shotGid: parsed.gid !== undefined ? parsed.gid : prev.shotGid,
-      }));
+      const updated = {
+        ...form,
+        shotBookId: parsed.bookId !== undefined ? parsed.bookId : form.shotBookId,
+        shotGid: parsed.gid !== undefined ? parsed.gid : form.shotGid,
+      };
+      setForm(updated);
+      onSaveSettings(updated);
       setShotExtractSuccess(true);
       setTimeout(() => setShotExtractSuccess(false), 3000);
     }
@@ -59,11 +119,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setKyujinUrlInput(val);
     const parsed = parseGoogleSheetUrl(val);
     if (parsed.bookId || parsed.gid) {
-      setForm((prev) => ({
-        ...prev,
-        kyujinBookId: parsed.bookId !== undefined ? parsed.bookId : prev.kyujinBookId,
-        kyujinGid: parsed.gid !== undefined ? parsed.gid : prev.kyujinGid,
-      }));
+      const updated = {
+        ...form,
+        kyujinBookId: parsed.bookId !== undefined ? parsed.bookId : form.kyujinBookId,
+        kyujinGid: parsed.gid !== undefined ? parsed.gid : form.kyujinGid,
+      };
+      setForm(updated);
+      onSaveSettings(updated);
       setKyujinExtractSuccess(true);
       setTimeout(() => setKyujinExtractSuccess(false), 3000);
     }
@@ -272,7 +334,148 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
       </div>
 
-      {/* 2. Audit & Fraud Thresholds */}
+      {/* 2. Verification Section (確認用) */}
+      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 shadow-sm space-y-4">
+        <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+          <div className="flex items-center gap-2">
+            <Search className="w-4 h-4 text-cyan-400" />
+            <h3 className="text-xs font-bold text-zinc-200 tracking-wider">
+              確認用：DYMTASK ID 行番号（ROW）・生成リンク照合
+            </h3>
+          </div>
+          <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-950/60 text-cyan-300 border border-cyan-800/60 font-semibold">
+            対比検証
+          </span>
+        </div>
+
+        <p className="text-xs text-zinc-400 leading-relaxed">
+          DYMTASK IDを入力すると、CSV解析で割り振られたシート行番号（rowNumber）とアプリが作成するGoogleスプレッドシートリンクをリアルタイムに確認・対比できます。
+        </p>
+
+        <div className="space-y-2">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+            <div className="relative flex-1">
+              <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
+              <input
+                type="text"
+                value={checkDymTaskId}
+                onChange={(e) => setCheckDymTaskId(e.target.value)}
+                placeholder="確認したいDYMTASK IDを入力（例: 102401）"
+                className="w-full pl-9 pr-3 py-2 rounded-lg bg-zinc-950 border border-zinc-700 text-zinc-100 text-xs font-mono placeholder:text-zinc-500 focus:outline-none focus:border-cyan-500"
+              />
+            </div>
+            {sampleAvailableIds.length > 0 && (
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-[11px] text-zinc-500">サンプルID:</span>
+                {sampleAvailableIds.map((id) => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setCheckDymTaskId(id)}
+                    className="px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-[11px] font-mono text-cyan-300 border border-zinc-700 transition-colors"
+                  >
+                    {id}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Verification Result Card */}
+        {checkDymTaskId.trim() ? (
+          foundCheckTask ? (
+            <div className="p-4 bg-zinc-950/80 rounded-xl border border-zinc-800 space-y-3">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                <div className="p-2.5 rounded-lg bg-zinc-900 border border-zinc-800">
+                  <div className="text-[11px] text-zinc-400 mb-0.5">DYMTASK ID</div>
+                  <div className="font-mono font-bold text-cyan-300 text-sm">
+                    {foundCheckTask.dymTaskId || '未設定'}
+                  </div>
+                </div>
+
+                <div className="p-2.5 rounded-lg bg-cyan-950/20 border border-cyan-800/60">
+                  <div className="text-[11px] text-cyan-300 mb-0.5 font-medium">CSV行番号（ROW）</div>
+                  <div className="font-mono font-bold text-cyan-400 text-sm">
+                    行 {foundCheckTask.originalRowNumber}
+                  </div>
+                </div>
+
+                <div className="p-2.5 rounded-lg bg-zinc-900 border border-zinc-800">
+                  <div className="text-[11px] text-zinc-400 mb-0.5">元タブ</div>
+                  <div className="font-semibold text-zinc-200">
+                    {foundCheckTask.sourceTab}
+                  </div>
+                </div>
+
+                <div className="p-2.5 rounded-lg bg-zinc-900 border border-zinc-800">
+                  <div className="text-[11px] text-zinc-400 mb-0.5">対応者</div>
+                  <div className="text-zinc-300">
+                    {foundCheckTask.assignee || '未設定'}
+                  </div>
+                </div>
+              </div>
+
+              <div className="text-xs space-y-1">
+                <div className="text-[11px] text-zinc-400">案件名（会社名） & タスク名:</div>
+                <div className="font-semibold text-zinc-100">
+                  {foundCheckTask.companyName}
+                  <span className="text-zinc-500 mx-2">/</span>
+                  <span className="text-zinc-300 font-normal">{foundCheckTask.taskName}</span>
+                </div>
+              </div>
+
+              <div className="pt-2 border-t border-zinc-800 text-xs space-y-2">
+                <div className="text-[11px] text-zinc-400 font-medium">生成リンク（Googleスプレッドシート）:</div>
+                {checkTaskSheetUrl ? (
+                  <div className="space-y-2">
+                    <div className="p-2 rounded bg-zinc-900 border border-zinc-800 font-mono text-[11px] text-cyan-300 break-all select-all">
+                      {checkTaskSheetUrl}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <a
+                        href={checkTaskSheetUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-500 transition-colors shadow-sm"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        <span>シートの該当行を開く</span>
+                      </a>
+                      <span className="text-[11px] text-zinc-500 font-mono">
+                        range={foundCheckTask.originalRowNumber}:{foundCheckTask.originalRowNumber}
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-3 bg-amber-950/60 border border-amber-800/80 rounded-lg text-amber-200 text-xs flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                    <div>
+                      <div className="font-semibold">設定でBOOK_IDとGIDを入力してください</div>
+                      <div className="text-[11px] text-amber-300/80 mt-0.5">
+                        {foundCheckTask.sourceTab}のBOOK_IDまたはGIDが未設定のため、URLを生成できません。（算定された行番号: 行 {foundCheckTask.originalRowNumber}）
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="p-3.5 bg-zinc-950/60 rounded-xl border border-zinc-800 text-xs text-zinc-400 flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>
+                該当するDYMTASK ID（<code className="text-zinc-200 font-mono">{checkDymTaskId}</code>）のタスクが見つかりません。CSVが読み込まれているか、またはIDをご確認ください。
+              </span>
+            </div>
+          )
+        ) : (
+          <div className="p-3 bg-zinc-950/40 rounded-xl border border-zinc-800/60 text-xs text-zinc-500">
+            確認したいDYMTASK IDを入力すると、行番号および生成されるGoogleスプレッドシートリンクが表示されます。
+          </div>
+        )}
+      </div>
+
+      {/* 3. Audit & Fraud Thresholds */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 shadow-sm space-y-4">
         <div className="flex items-center gap-2 border-b border-zinc-800 pb-3">
           <AlertTriangle className="w-4 h-4 text-amber-400" />

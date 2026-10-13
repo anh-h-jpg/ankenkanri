@@ -84,6 +84,14 @@ export async function parseShotCsv(
           const actualIdx = findHeaderIndex(headers, '実際時間');
           const dymIdIdx = findHeaderIndex(headers, 'DYMTASK');
           const stopDateIdx = stopDateColConfig ? findHeaderIndex(headers, stopDateColConfig) : -1;
+          const startDateIdx = findHeaderIndex(headers, '対応開始日') >= 0
+            ? findHeaderIndex(headers, '対応開始日')
+            : findHeaderIndex(headers, '開始日');
+          const completedDateIdx = findHeaderIndex(headers, '対応完了日') >= 0
+            ? findHeaderIndex(headers, '対応完了日')
+            : (findHeaderIndex(headers, '完了日') >= 0
+                ? findHeaderIndex(headers, '完了日')
+                : findHeaderIndex(headers, '対応開始日／対応完了日'));
 
           const colIndices = {
             statusIdx: statusSubIdx,
@@ -96,6 +104,8 @@ export async function parseShotCsv(
             actualIdx,
             dymIdIdx,
             stopDateIdx,
+            startDateIdx,
+            completedDateIdx,
           };
 
           const tasks: BaseRegistryTask[] = [];
